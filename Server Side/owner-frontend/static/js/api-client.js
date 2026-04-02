@@ -140,4 +140,22 @@ export class AdminApiClient {
       body: JSON.stringify(payload),
     });
   }
+
+  /** @returns {Promise<{enabled: boolean, backup_count: number, last_backup_file: string|null, last_backup_size_mb: number|null, warning?: string}>} */
+  getBackupSettings() {
+    return this.request("/admin/backup/settings");
+  }
+
+  /** @param {{enabled: boolean}} payload @returns {Promise<{enabled: boolean, message: string}>} */
+  setBackupSettings(payload) {
+    return this.request("/admin/backup/settings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /** @returns {Promise<Array<{name: string, size_bytes: number, size_mb: number, created_at: string}>>} */
+  listBackups() {
+    return this.request("/admin/backup/list");
+  }
 }
