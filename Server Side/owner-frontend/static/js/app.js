@@ -256,6 +256,7 @@ const loaders = {
   rankings: loadRankings,
   analytics: loadAnalytics,
   decisions: loadDecisions,
+  backup: loadBackupSection,
 };
 
 function setupNavigation() {
@@ -318,3 +319,94 @@ function init() {
 }
 
 init();
+
+// ── Backup Section ────────────────────────────────────────────
+
+async function loadBackupSection() {
+  try {
+    const s = await api.getBackupSettings();
+    const toggle = document.getElementById("backup-toggle");
+    const label = document.getElementById("backup-toggle-label");
+    const stats = document.getElementById("backup-stats");
+    toggle.checked = s.enabled;
+    label.textContent = s.enabled ? "Enabled" : "Disabled";
+    const lastFile = s.last_backup_file
+      ? `Last: ${s.last_backup_file} (${s.last_backup_size_mb ?? "?"} MB)`
+      : "No backups yet";
+    stats.textContent = `${s.backup_count} archive(s) stored. ${lastFile}`;
+    if (s.warning) stats.textContent += ` — ${s.warning}`;
+
+    const newToggle = toggle.cloneNode(true);
+    newToggle.checked = s.enabled;
+    toggle.parentNode.replaceChild(newToggle, toggle);
+    newToggle.addEventListener("change", async () => {
+      try {
+        const res = await api.setBackupSettings({ enabled: newToggle.checked });
+        label.textContent = res.enabled ? "Enabled" : "Disabled";
+        toast(res.message);
+      } catch (e) {
+        toast(`Failed: ${e.message}`, true);
+        newToggle.checked = !newToggle.checked;
+      }
+    });
+  } catch (e) {
+    document.getElementById("backup-stats").textContent = `Error: ${e.message}`;
+  }
+
+  try {
+    const files = await api.listBackups();
+    const tbody = document.getElementById("backup-list-body");
+    if (!files.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--muted)">No backups stored yet.</td></tr>';
+    } else {
+      tbody.innerHTML = files.map(f => `
+        <tr>
+          <td style="font-family:monospace;font-size:.78rem">${sanitize(f.name)}</td>
+          <td>${f.size_mb} MB</td>
+          <td>${new Date(f.created_at).toLocaleString()}</td>
+        </tr>
+      `).join("");
+    }
+  } catch (e) {
+    document.getElementById("backup-list-body").innerHTML =
+      `<tr><td colspan="3" style="color:var(--muted)">Error: ${sanitize(e.message)}</td></tr>`;
+  }
+
+  document.getElementById("backup-download-btn").onclick = downloadBackupNow;
+}
+
+async function downloadBackupNow() {
+  const btn = document.getElementById("backup-download-btn");
+  const status = document.getElementById("backup-download-status");
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  status.textContent = "Running mysqldump — this may take a moment…";
+  try {
+    const res = await fetch("/api/admin/backup/download", {
+      headers: { Authorization: `Bearer ${api.token}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+      throw new Error(err.detail || "Download failed");
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const match = cd.match(/filename="?([^"]+)"?/);
+    const fname = match ? match[1] : `wattwise-backup-${Date.now()}.sql.gz`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+    status.textContent = `Downloaded: ${sanitize(fname)}`;
+    toast("Backup downloaded successfully");
+    loadBackupSection();
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+    toast(`Backup failed: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Download Backup Now";
+  }
+}
