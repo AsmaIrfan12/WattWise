@@ -75,17 +75,37 @@ influxdb:
   password: ""
   ssl: false
 
-# ── WattWise Cloud MQTT Broker ─────────────────────────────────────────────────
-# Connects via MQTT-over-WebSocket through Cloudflare (port 443).
-# This works without opening any extra firewall ports.
+# ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
+# Choose ONE connection method and comment out the other.
+#
+# Option A — WebSocket via nginx on port 80 (same port as the web app):
+#   Works through most firewalls. Replace YOUR_DROPLET_IP with your DO reserved IP.
 mqtt:
-  host: "talk2futurebuildings.systems"
-  port: 443
-  transport: "websockets"       # websockets = connects via wss:// through Cloudflare
-  ws_path: "/mqtt"              # nginx routes /mqtt → mosquitto:9001
-  username: ""                  # leave blank (anonymous enabled on broker)
+  host: "YOUR_DROPLET_IP"
+  port: 80
+  transport: "websockets"
+  ws_path: "/mqtt"
+  username: ""
   password: ""
-  tls: false                    # tls_set() is auto-applied when transport=websockets
+  tls: false
+
+# Option B — Direct MQTT TCP on port 1883 (simpler protocol):
+#   Uncomment this block and comment out Option A to use it.
+# mqtt:
+#   host: "YOUR_DROPLET_IP"
+#   port: 1883
+#   transport: "tcp"
+#   username: ""
+#   password: ""
+#   tls: false
+
+# ── Original Cloudflare config preserved as reference ─────────────────────────
+# mqtt:
+#   host: "talk2futurebuildings.systems"
+#   port: 443
+#   transport: "websockets"
+#   ws_path: "/mqtt"
+#   tls: false
 
 # ── Publisher Settings ────────────────────────────────────────────
 publish_interval_seconds: 30   # Read + publish every 30 seconds
