@@ -79,9 +79,8 @@ influxdb:
 # Choose ONE connection method and comment out the other.
 #
 # Option A — WebSocket via nginx on port 80 (same port as the web app):
-#   Works through most firewalls. Replace YOUR_DROPLET_IP with your DO reserved IP.
 mqtt:
-  host: "YOUR_DROPLET_IP"
+  host: "129.212.138.248"
   port: 80
   transport: "websockets"
   ws_path: "/mqtt"
@@ -92,7 +91,7 @@ mqtt:
 # Option B — Direct MQTT TCP on port 1883 (simpler protocol):
 #   Uncomment this block and comment out Option A to use it.
 # mqtt:
-#   host: "YOUR_DROPLET_IP"
+#   host: "129.212.138.248"
 #   port: 1883
 #   transport: "tcp"
 #   username: ""
