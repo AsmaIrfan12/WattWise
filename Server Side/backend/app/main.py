@@ -26,7 +26,7 @@ from app.scheduler import (
     calculate_decision_impacts, compute_rankings
 )
 from app.email_report import send_weekly_reports
-from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export
+from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("main")
@@ -265,6 +265,7 @@ app.include_router(decisions.router)
 app.include_router(analysis.router)
 app.include_router(admin.router)
 app.include_router(export.router)
+app.include_router(backup.router)
 
 
 # ── Health ────────────────────────────────────────────────────
