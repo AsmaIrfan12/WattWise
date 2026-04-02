@@ -4,7 +4,7 @@ WORKDIR /app
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc default-libmysqlclient-dev pkg-config curl \
+    gcc default-libmysqlclient-dev default-mysql-client pkg-config curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
