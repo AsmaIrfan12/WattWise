@@ -1,0 +1,37 @@
+# WattWise — DigitalOcean Production Override
+# ============================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+#
+# Port security note:
+#   MySQL (3307) and InfluxDB (8086) are exposed in the base docker-compose.yml
+#   for developer convenience (direct DB access from laptop tools).
+#   On DigitalOcean, block these ports at the DO external firewall level —
+#   do NOT add 3307 or 8086 as inbound rules. The firewall blocks them before
+#   they reach the droplet, regardless of docker-compose port bindings.
+#
+# Required DO firewall inbound rules:
+#   TCP 22   — SSH
+#   TCP 80   — nginx (web, API, /admin, MQTT WebSocket)
+#   TCP 1883 — MQTT direct TCP from RPi
+#   (all others: no inbound rule = blocked)
+#
+# To add HTTPS later:
+#   1. Uncomment the certbot service below
+#   2. Uncomment the HTTPS server block in nginx.conf
+#   3. Add TCP 443 to DO firewall inbound rules
+
+services: {}
+
+# Uncomment when adding certbot for HTTPS:
+# services:
+#   certbot:
+#     image: certbot/certbot
+#     volumes:
+#       - letsencrypt:/etc/letsencrypt
+#       - certbot_webroot:/var/www/certbot
+#     entrypoint: >
+#       sh -c "trap exit TERM; while :; do
+#         certbot renew --webroot -w /var/www/certbot --quiet;
+#         sleep 12h & wait $${!};
+#       done"
