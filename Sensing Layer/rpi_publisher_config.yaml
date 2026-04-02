@@ -1,0 +1,92 @@
+# WattWise RPi MQTT Publisher — Configuration
+# =============================================
+# Copy this file to /etc/wattwise/publisher.yaml on each Raspberry Pi.
+# Edit home.id and home.devices to match the registered home in WattWise.
+#
+# Author: Mr. Suhas Devmane, Cardiff University, UK
+
+# ── Home Identity ─────────────────────────────────────────────────
+# home.id must match the numeric MySQL homes.id returned by POST /api/homes
+home:
+  id: "1"                        # Replace with your actual home ID from the API
+  name: "Home 1 - Cardiff"       # Human readable label
+
+  # Devices connected to Tapo smart plugs.
+  # entity_id must exactly match the InfluxDB entity_id tag in Home Assistant.
+  #
+  # HOW TO FIND YOUR ENTITY IDs:
+  #   1. Open Home Assistant → Developer Tools → Template
+  #   2. Paste: {{ states.sensor | selectattr('attributes.device_class','eq','power') | map(attribute='entity_id') | list }}
+  #   OR
+  #   1. Open InfluxDB tab in HA sidebar (Chronograf)
+  #   2. Run: SELECT * FROM "W" LIMIT 5   → look at entity_id tag values
+  #
+  devices:
+    - id: "kettle"
+      name: "Kettle"
+      appliance_key: "kettle"
+      entity_id: "sensor.tapo_kettle_current_consumption"    # ← your HA entity_id
+      power_entity_id: "sensor.tapo_kettle_current_consumption"
+      current_entity_id: "sensor.tapo_kettle_current"
+      switch_entity_id: "switch.tapo_kettle"
+
+    - id: "washing_machine"
+      name: "Washing Machine"
+      appliance_key: "washingmachine"
+      entity_id: "sensor.tapo_washing_machine_current_consumption"
+      power_entity_id: "sensor.tapo_washing_machine_current_consumption"
+      current_entity_id: "sensor.tapo_washing_machine_current"
+      switch_entity_id: "switch.tapo_washing_machine"
+
+    - id: "dryer"
+      name: "Tumble Dryer"
+      appliance_key: "dryer"
+      entity_id: "sensor.tapo_dryer_current_consumption"
+      power_entity_id: "sensor.tapo_dryer_current_consumption"
+      current_entity_id: "sensor.tapo_dryer_current"
+      switch_entity_id: "switch.tapo_dryer"
+
+    - id: "dishwasher"
+      name: "Dishwasher"
+      appliance_key: "dishwasher"
+      entity_id: "sensor.tapo_dishwasher_current_consumption"
+      power_entity_id: "sensor.tapo_dishwasher_current_consumption"
+      current_entity_id: "sensor.tapo_dishwasher_current"
+      switch_entity_id: "switch.tapo_dishwasher"
+
+    - id: "microwave"
+      name: "Microwave"
+      appliance_key: "microwave"
+      entity_id: "sensor.tapo_microwave_current_consumption"
+      power_entity_id: "sensor.tapo_microwave_current_consumption"
+
+    - id: "coffeemachine"
+      name: "Coffee Machine"
+      appliance_key: "coffeemachine"
+      entity_id: "sensor.tapo_coffee_machine_current_consumption"
+      power_entity_id: "sensor.tapo_coffee_machine_current_consumption"
+
+# ── Local InfluxDB (on this RPi — Home Assistant's built-in InfluxDB) ─────────
+influxdb:
+  host: "localhost"
+  port: 8086
+  database: "homeassistant"   # HA default — check your HA InfluxDB addon settings
+  username: ""                # Leave blank if HA InfluxDB has no auth
+  password: ""
+  ssl: false
+
+# ── WattWise Cloud MQTT Broker ─────────────────────────────────────────────────
+# Connects via MQTT-over-WebSocket through Cloudflare (port 443).
+# This works without opening any extra firewall ports.
+mqtt:
+  host: "talk2futurebuildings.systems"
+  port: 443
+  transport: "websockets"       # websockets = connects via wss:// through Cloudflare
+  ws_path: "/mqtt"              # nginx routes /mqtt → mosquitto:9001
+  username: ""                  # leave blank (anonymous enabled on broker)
+  password: ""
+  tls: false                    # tls_set() is auto-applied when transport=websockets
+
+# ── Publisher Settings ────────────────────────────────────────────
+publish_interval_seconds: 30   # Read + publish every 30 seconds
+log_level: "INFO"              # DEBUG | INFO | WARNING | ERROR

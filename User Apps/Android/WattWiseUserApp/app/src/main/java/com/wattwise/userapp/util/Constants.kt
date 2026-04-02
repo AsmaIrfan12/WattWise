@@ -1,0 +1,56 @@
+package com.wattwise.userapp.util
+
+/**
+ * WattWise — Application-wide constants.
+ *
+ * Developer : Mr. Suhas Devmane
+ * Institution: Cardiff University, Wales, UK
+ * School     : School of Computer Science & Informatics (COMSC)
+ * Research   : PhD — Community-Level Energy Decision-Making & Behaviour Change
+ * Version    : 4.0.0 (Community Release)
+ */
+object Constants {
+
+    // ── Production Server ────────────────────────────────────────
+    // Set to production WattWise cloud URL before building release APK
+    const val DEFAULT_SERVER_URL = "https://www.talk2futurebuildings.systems"
+    const val DEFAULT_PORT       = 443               // HTTPS
+    const val DEFAULT_API_PORT   = 8000              // FastAPI backend
+    const val DEFAULT_TIMEOUT    = 20
+
+    // ── Notification Channels ────────────────────────────────────
+    const val NOTIFICATION_CHANNEL_ID_ENERGY    = "wattwise_energy_alerts"
+    const val NOTIFICATION_CHANNEL_NAME_ENERGY  = "WattWise Energy Alerts"
+    const val NOTIFICATION_CHANNEL_ID_INFO      = "wattwise_info"
+    const val NOTIFICATION_CHANNEL_NAME_INFO    = "WattWise Updates"
+
+    // ── Preferences DataStore ────────────────────────────────────
+    const val PREFERENCES_NAME = "wattwise_user_app_prefs"
+
+    // ── API Paths ────────────────────────────────────────────────
+    const val API_LOGIN          = "/api/auth/login"
+    const val API_SIGNUP         = "/api/auth/signup"
+    const val API_NOTIFICATIONS  = "/api/notifications"
+    const val API_GOALS          = "/api/goals"
+    const val API_DECISIONS      = "/api/decisions"
+    const val API_RANKINGS       = "/api/rankings/me"
+    const val API_LEADERBOARD    = "/api/rankings/leaderboard"
+    const val API_PUSH_TOKEN     = "/api/auth/push-token"
+    const val API_HEALTH         = "/health"
+
+    // ── Developer & Research Details ─────────────────────────────
+    const val DEVELOPER_NAME         = "Mr. Suhas Devmane"
+    const val DEVELOPER_INSTITUTION  = "Cardiff University"
+    const val DEVELOPER_SCHOOL       = "School of Computer Science & Informatics (COMSC)"
+    const val DEVELOPER_LOCATION     = "Cardiff, Wales, United Kingdom"
+    const val RESEARCH_DESCRIPTION   = "Community Energy Decision-Making & Behaviour Change"
+
+    // ── App Metadata ─────────────────────────────────────────────
+    const val APP_VERSION        = "4.0.0"
+    const val APP_VERSION_NAME   = "Community Release"
+    const val APP_TAGLINE        = "Track. Save. Compete."
+    const val APP_YEAR           = "2024–2026"
+
+    // Backward compat (keep for any references in existing code)
+    const val DEVELOPER_CREDIT   = "$DEVELOPER_NAME, $DEVELOPER_INSTITUTION, UK"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "WattWise Energy",
+  "short_name": "WattWise",
+  "id": "/",
+  "scope": "/",
+  "start_url": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#16a34a",
+  "description": "WattWise Energy Dashboard",
+  "lang": "en-GB",
+  "categories": ["utilities", "lifestyle"]
+}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- WattWise Main Theme — Material 3 Dark with energy branding -->
+    <style name="Theme.WattWise" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="colorTertiary">@color/warning</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="android:statusBarColor">@color/primary_dark</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+
+    <!-- Alias for backwards compatibility with any XML that uses old name -->
+    <style name="Theme.WattWiseApp" parent="Theme.WattWise" />
+
+    <!-- Splash screen theme -->
+    <style name="Theme.WattWise.Splash" parent="Theme.WattWise">
+        <item name="android:windowBackground">@color/primary</item>
+    </style>
+</resources>

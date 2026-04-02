@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WattWise — Energy Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="manifest" href="/manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--green:#16a34a;--green-d:#15803d;--green-l:#dcfce7;--blue:#0ea5e9;--amber:#f59e0b;--red:#ef4444;--bg:#0f172a;--surf:#1e293b;--surf2:#334155;--t:#f8fafc;--mu:#94a3b8;--bd:#334155}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
+.topbar{background:var(--surf);border-bottom:1px solid var(--bd);padding:14px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.1rem;color:var(--green)}
+.nav-tabs{display:flex;gap:4px}
+.tab{padding:7px 14px;border-radius:8px;border:none;background:transparent;color:var(--mu);cursor:pointer;font-size:.82rem;font-weight:500;transition:all .2s}
+.tab.active,.tab:hover{background:rgba(22,163,74,.15);color:var(--t)}
+.user-btn{display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--mu)}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.875rem;color:#fff}
+.content{padding:20px;max-width:1100px;margin:0 auto}
+.stats-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:20px}
+.sc{background:var(--surf);border:1px solid var(--bd);border-radius:12px;padding:16px;position:relative;overflow:hidden}
+.sc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.g::before{background:var(--green)}.b::before{background:var(--blue)}.a::before{background:var(--amber)}.r::before{background:var(--red)}
+.sc-label{font-size:.7rem;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.sc-val{font-size:1.6rem;font-weight:700;line-height:1.1}
+.sc-sub{font-size:.7rem;color:var(--mu);margin-top:3px}
+.card{background:var(--surf);border:1px solid var(--bd);border-radius:12px;padding:18px;margin-bottom:16px}
+.card-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.card-title{font-size:.8rem;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.chart-wrap{height:160px;position:relative}
+.skeleton{background:linear-gradient(90deg,var(--surf2) 25%,var(--surf) 50%,var(--surf2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;color:transparent!important}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.device-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(51,65,85,.4)}
+.device-row:last-child{border:none}
+.device-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0}
+.device-name{flex:1;font-size:.875rem;font-weight:500}
+.device-loc{font-size:.72rem;color:var(--mu)}
+.device-kwh{font-size:.875rem;font-weight:600;text-align:right}
+.device-cost{font-size:.72rem;color:var(--mu)}
+.prog-wrap{background:var(--surf2);border-radius:8px;height:8px;margin-top:6px;overflow:hidden}
+.prog{height:100%;border-radius:8px;background:var(--green);transition:width .6s}
+.prog.warn{background:var(--amber)}.prog.over{background:var(--red)}
+.notif-item{padding:12px;border-radius:10px;margin-bottom:8px;border:1px solid var(--bd);position:relative;overflow:hidden}
+.notif-item::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px}
+.notif-item.INFO::before{background:var(--blue)}.notif-item.WARNING::before{background:var(--amber)}
+.notif-item.ALERT::before{background:var(--red)}.notif-item.CRITICAL::before{background:var(--red)}
+.notif-title{font-size:.875rem;font-weight:600;margin-bottom:3px}
+.notif-msg{font-size:.8rem;color:var(--mu)}
+.notif-time{font-size:.7rem;color:var(--mu);margin-top:4px}
+.notif-actions{display:flex;gap:8px;margin-top:8px}
+.btn{padding:7px 16px;border:none;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-g{background:var(--green);color:#fff}.btn-g:hover{background:var(--green-d)}
+.btn-outline{background:transparent;border:1px solid var(--bd);color:var(--mu)}.btn-outline:hover{border-color:var(--green);color:var(--t)}
+.btn-sm{padding:5px 12px}
+.rank-card{background:linear-gradient(135deg,rgba(22,163,74,.2),rgba(14,165,233,.1));border:1px solid var(--green);border-radius:14px;padding:20px;text-align:center;margin-bottom:16px}
+.rank-num{font-size:3rem;font-weight:700;color:var(--green);line-height:1}
+.rank-pct{font-size:.875rem;color:var(--mu);margin-top:6px}
+.score-ring{width:90px;height:90px;border-radius:50%;background:conic-gradient(var(--green) calc(var(--pct,70)*1%),var(--surf2) 0);display:flex;align-items:center;justify-content:center;margin:14px auto}
+.score-inner{width:70px;height:70px;border-radius:50%;background:var(--surf);display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700}
+.goal-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(51,65,85,.4)}
+.goal-row:last-child{border:none}
+.goal-info{flex:1}
+.goal-name{font-size:.875rem;font-weight:500}
+.goal-details{font-size:.72rem;color:var(--mu);margin-top:2px}
+.pill{padding:3px 9px;border-radius:20px;font-size:.68rem;font-weight:600}
+.pill-g{background:rgba(22,163,74,.2);color:var(--green)}
+.pill-a{background:rgba(245,158,11,.2);color:var(--amber)}
+.pill-r{background:rgba(239,68,68,.2);color:var(--red)}
+.form-row{display:flex;gap:10px;margin-bottom:12px}
+input,select{flex:1;background:var(--surf2);border:1px solid var(--bd);border-radius:8px;padding:9px 12px;color:var(--t);font-size:.875rem;font-family:inherit}
+input:focus,select:focus{outline:none;border-color:var(--green)}
+.toggle{display:flex;background:var(--surf2);border-radius:8px;padding:2px;width:fit-content;margin-bottom:16px}
+.toggle button{padding:5px 14px;border:none;border-radius:6px;background:transparent;color:var(--mu);cursor:pointer;font-size:.78rem;font-weight:500}
+.toggle button.on{background:var(--surf);color:var(--t)}
+section{display:none}section.active{display:block}
+#toast{position:fixed;bottom:24px;right:20px;background:var(--green);color:#fff;padding:12px 20px;border-radius:10px;font-size:.875rem;font-weight:500;transform:translateY(60px);opacity:0;transition:all .3s;z-index:999}
+#toast.show{transform:translateY(0);opacity:1}
+.loading{color:var(--mu);font-size:.875rem;padding:20px 0;text-align:center}
+.auth-overlay{position:fixed;inset:0;background:rgba(2,6,23,.78);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:1200;padding:16px}
+.auth-card{width:100%;max-width:380px;background:var(--surf);border:1px solid var(--bd);border-radius:14px;padding:20px}
+.auth-title{font-size:.95rem;font-weight:700;margin-bottom:6px}
+.auth-sub{font-size:.78rem;color:var(--mu);margin-bottom:14px}
+.auth-error{display:none;font-size:.78rem;color:#fecaca;background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.35);padding:8px 10px;border-radius:8px;margin-top:10px}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}.nav-tabs{overflow-x:auto}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="logo">⚡ WattWise</div>
+  <nav class="nav-tabs">
+    <button class="tab active" data-sec="home">🏠 Dashboard</button>
+    <button class="tab" data-sec="devices">🔌 Devices</button>
+    <button class="tab" data-sec="notifications">🔔 Alerts</button>
+    <button class="tab" data-sec="goals">🎯 Goals</button>
+    <button class="tab" data-sec="ranking">🏆 Ranking</button>
+  </nav>
+  <div class="user-btn"><div class="avatar" id="av">?</div><span id="uname">Loading…</span><button id="logout-btn" class="btn btn-outline btn-sm" style="margin-left:6px;display:none">Logout</button></div>
+</header>
+
+<div id="auth-overlay" class="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-title">Sign in to WattWise</div>
+    <div class="auth-sub">Use your user account to access live readings and analytics.</div>
+    <div class="form-row"><input id="auth-email" type="email" placeholder="Email"></div>
+    <div class="form-row"><input id="auth-pass" type="password" placeholder="Password"></div>
+    <button id="auth-btn" class="btn btn-g" style="width:100%">Sign In</button>
+    <div id="auth-error" class="auth-error"></div>
+  </div>
+</div>
+
+<div class="content">
+  <div id="toast"></div>
+
+  <!-- ── Home ─────────────────────────── -->
+  <section id="s-home" class="active">
+    <div class="stats-row">
+      <div class="sc g"><div class="sc-label">Today's Usage</div><div class="sc-val" id="h-kwh">— kWh</div><div class="sc-sub" id="h-goal-pct">— of goal</div></div>
+      <div class="sc b"><div class="sc-label">Estimated Cost</div><div class="sc-val" id="h-cost">£—</div><div class="sc-sub">today</div></div>
+      <div class="sc a" id="tariff-card"><div class="sc-label">Current Tariff</div><div class="sc-val" id="h-tariff">—p</div><div class="sc-sub" id="h-tariff-label">per kWh</div></div>
+      <div class="sc g"><div class="sc-label">Your Rank</div><div class="sc-val" id="h-rank">#—</div><div class="sc-sub" id="h-percentile">—</div></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-hdr"><span class="card-title">Today by Device</span></div>
+        <div id="device-today"><div class="loading">Loading…</div></div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><span class="card-title">7-Day Trend</span>
+          <span id="peak-badge" style="font-size:.7rem;padding:3px 8px;border-radius:20px;background:rgba(245,158,11,.2);color:var(--amber);display:none">⚡ Peak Time</span>
+        </div>
+        <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+      </div>
+    </div>
+    <!-- Unread notifications preview -->
+    <div class="card">
+      <div class="card-hdr"><span class="card-title">Recent Alerts</span><button class="btn btn-outline btn-sm" onclick="goSection('notifications')">See all</button></div>
+      <div id="home-alerts"><div class="loading">Loading…</div></div>
+    </div>
+  </section>
+
+  <!-- ── Devices ────────────────────────── -->
+  <section id="s-devices">
+    <div class="card">
+      <div class="card-hdr"><span class="card-title">My Devices</span><button class="btn btn-g btn-sm" onclick="showAddDevice()">+ Add Device</button></div>
+      <div id="device-list"><div class="loading">Loading…</div></div>
+    </div>
+    <div class="card" id="add-device-form" style="display:none">
+      <div class="card-title" style="margin-bottom:14px">Add New Device</div>
+      <div class="form-row">
+        <input id="dev-name" placeholder="Device name (e.g. Kitchen Kettle)">
+        <input id="dev-entity" placeholder="Entity ID (e.g. switch.kettle)">
+      </div>
+      <div class="form-row">
+        <select id="dev-type">
+          <option value="kettle">Kettle</option><option value="washing_machine">Washing Machine</option>
+          <option value="dishwasher">Dishwasher</option><option value="dryer">Dryer</option>
+          <option value="microwave">Microwave</option><option value="gaming_console">Gaming Console</option>
+          <option value="other">Other</option>
+        </select>
+        <input id="dev-location" placeholder="Location (e.g. Kitchen)">
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-g" onclick="addDevice()">Save Device</button>
+        <button class="btn btn-outline" onclick="document.getElementById('add-device-form').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Notifications ──────────────────── -->
+  <section id="s-notifications">
+    <div class="toggle">
+      <button class="on" onclick="filterNotifs('all')">All</button>
+      <button onclick="filterNotifs('unread')">Unread</button>
+      <button onclick="filterNotifs('action_required')">Action Required</button>
+      <button onclick="filterNotifs('critical')">Critical</button>
+    </div>
+    <div id="notif-list"><div class="loading">Loading…</div></div>
+  </section>
+
+  <!-- ── Goals ─────────────────────────── -->
+  <section id="s-goals">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:14px">Set New Goal</div>
+      <div class="form-row">
+        <select id="g-type"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+        <input type="number" id="g-kwh" placeholder="Target kWh" step="0.1" min="0.1">
+      </div>
+      <button class="btn btn-g" onclick="createGoal()">✅ Set Goal</button>
+    </div>
+    <div id="goals-list"><div class="loading">Loading…</div></div>
+  </section>
+
+  <!-- ── Ranking ────────────────────────── -->
+  <section id="s-ranking">
+    <div class="rank-card" id="rank-hero">
+      <div style="font-size:.8rem;color:var(--mu);margin-bottom:8px">Your Community Rank</div>
+      <div class="rank-num" id="r-pos">#—</div>
+      <div class="rank-pct" id="r-pct">Loading your ranking…</div>
+      <div style="margin:12px 0;font-size:.8rem;color:var(--mu)">Overall score</div>
+      <div class="score-ring" id="score-ring">
+        <div class="score-inner" id="r-score">—</div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-title">Score Breakdown</div>
+        <div id="score-breakdown" style="font-size:.82rem;padding-top:4px"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Decision Impact</div>
+        <div id="impact-detail" style="font-size:.82rem;padding-top:4px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Community Leaderboard (Top 10)</div>
+      <div id="leaderboard"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const API='/api';
+let token=localStorage.getItem('ww_token')||'';
+let homeId=null, userId=null;
+let trendChartInstance=null;
+
+function sanitize(s){
+  return typeof DOMPurify!=='undefined'?DOMPurify.sanitize(String(s??'')):String(s??'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function bootstrapTokenFromFragment(){
+  const h=window.location.hash||'';
+  if(!h.startsWith('#ww_token=')) return;
+  const incoming=decodeURIComponent(h.slice('#ww_token='.length));
+  if(incoming){
+    token=incoming;
+    localStorage.setItem('ww_token',incoming);
+  }
+  if(window.history&&window.history.replaceState){
+    window.history.replaceState({},document.title,window.location.pathname+window.location.search);
+  }else{
+    window.location.hash='';
+  }
+}
+
+function setAuthUi(isAuthed){
+  const overlay=document.getElementById('auth-overlay');
+  const logoutBtn=document.getElementById('logout-btn');
+  overlay.style.display=isAuthed?'none':'flex';
+  logoutBtn.style.display=isAuthed?'inline-flex':'none';
+}
+
+async function login(){
+  const email=document.getElementById('auth-email').value.trim();
+  const pass=document.getElementById('auth-pass').value;
+  const btn=document.getElementById('auth-btn');
+  const err=document.getElementById('auth-error');
+
+  err.style.display='none';
+  btn.disabled=true;
+  btn.textContent='Signing in...';
+  try{
+    const r=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(data.detail||'Login failed');
+    if(data.is_admin) throw new Error('Please use a non-admin account for the user dashboard.');
+    token=data.access_token||'';
+    if(!token) throw new Error('Invalid login response.');
+    localStorage.setItem('ww_token',token);
+    setAuthUi(true);
+    init();
+  }catch(e){
+    err.textContent=e.message||'Login failed';
+    err.style.display='block';
+  }finally{
+    btn.disabled=false;
+    btn.textContent='Sign In';
+  }
+}
+
+function logout(){
+  token='';
+  homeId=null;
+  userId=null;
+  localStorage.removeItem('ww_token');
+  document.getElementById('uname').textContent='(Not logged in)';
+  document.getElementById('av').textContent='?';
+  setAuthUi(false);
+}
+
+async function apiFetch(path,opts={}){
+  const r=await fetch(API+path,{headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json',...(opts.headers||{})}, ...opts});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function toast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.style.background=err?'#ef4444':'#16a34a';t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+
+// Section tabs
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    goSection(tab.dataset.sec);
+  });
+});
+function goSection(name){
+  document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('s-'+name).classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>{if(t.dataset.sec===name)t.classList.add('active');});
+  loaders[name]?.();
+}
+
+// ── Init ───────────────────────────────────────────────────────
+async function init(){
+  bootstrapTokenFromFragment();
+
+  document.getElementById('auth-btn').onclick=login;
+  document.getElementById('auth-pass').onkeydown=(e)=>{if(e.key==='Enter')login();};
+  document.getElementById('logout-btn').onclick=logout;
+
+  if(!token){
+    document.getElementById('uname').textContent='(Not logged in)';
+    setAuthUi(false);
+    return;
+  }
+  try{
+    // Get homes
+    const homes=await apiFetch('/homes');
+    if(homes.length){homeId=homes[0].id;}
+    document.getElementById('uname').textContent='Welcome!';
+    document.getElementById('av').textContent='U';
+    setAuthUi(true);
+    loadHome();
+  }catch(e){
+    token='';
+    localStorage.removeItem('ww_token');
+    document.getElementById('uname').textContent='Login required';
+    setAuthUi(false);
+  }
+}
+
+// ── Home Dashboard ─────────────────────────────────────────
+async function loadHome(){
+  if(!homeId) return;
+  try{
+    const data=await apiFetch('/readings/home/'+homeId+'/today');
+    document.getElementById('h-kwh').textContent=data.total_kwh.toFixed(2)+' kWh';
+    document.getElementById('h-cost').textContent='£'+data.total_cost_gbp.toFixed(2);
+    const tariff=(data.current_tariff_per_kwh||0.27)*100;
+    document.getElementById('h-tariff').textContent=tariff.toFixed(0)+'p';
+    document.getElementById('h-tariff-label').textContent=data.is_peak_time?'⚡ Peak Rate':'Standard Rate';
+    if(data.is_peak_time){document.getElementById('tariff-card').style.setProperty('--','');document.getElementById('peak-badge').style.display='inline-block';}
+
+    const devEl=document.getElementById('device-today');
+    const colours=['#16a34a','#0ea5e9','#f59e0b','#8b5cf6','#ef4444','#ec4899','#14b8a6'];
+    devEl.innerHTML=data.devices.map((d,i)=>`
+      <div class="device-row">
+        <div class="device-icon" style="background:${colours[i%colours.length]}22;color:${colours[i%colours.length]}">${iconFor(d.appliance_key)}</div>
+        <div style="flex:1">
+          <div class="device-name">${sanitize(d.name)}</div>
+          <div class="device-loc">${sanitize(d.location||'')}</div>
+        </div>
+        <div style="text-align:right"><div class="device-kwh">${d.total_kwh.toFixed(3)} kWh</div><div class="device-cost">£${d.estimated_cost_gbp.toFixed(3)}</div></div>
+      </div>`).join('');
+  }catch(e){}
+
+  // 7-day trend
+  try{
+    if(!homeId) return;
+    const devices=await apiFetch('/homes/'+homeId+'/devices');
+    if(devices.length){
+      const daily=await apiFetch('/readings/'+devices[0].id+'/daily?days=7');
+      const labels=daily.map(d=>d.day_date||'');
+      const vals=daily.map(d=>d.total_kwh||0);
+      const ctx=document.getElementById('trendChart');
+      if(trendChartInstance) trendChartInstance.destroy();
+      trendChartInstance=new Chart(ctx,{
+        type:'bar',
+        data:{labels,datasets:[{label:'kWh',data:vals,backgroundColor:'rgba(22,163,74,0.7)',borderColor:'#16a34a',borderWidth:1,borderRadius:4}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(c)=>`${c.parsed.y.toFixed(2)} kWh`}}},scales:{y:{beginAtZero:true,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#94a3b8'}},x:{grid:{display:false},ticks:{color:'#94a3b8'}}}}
+      });
+    }
+  }catch(e){}
+
+  loadAlertPreview();
+  loadHRank();
+}
+
+async function loadAlertPreview(){
+  try{
+    const notifs=await apiFetch('/notifications/?limit=3&filter=unread');
+    const el=document.getElementById('home-alerts');
+    if(!notifs.length){el.innerHTML='<div class="loading">No new alerts 🎉</div>';return;}
+    el.innerHTML=notifs.map(n=>notifHTML(n)).join('');
+  }catch(e){}
+}
+
+async function loadHRank(){
+  try{
+    const ranks=await apiFetch('/rankings/me?period=DAILY&limit=1');
+    if(ranks.length){
+      const r=ranks[0];
+      document.getElementById('h-rank').textContent='#'+r.rank_position;
+      document.getElementById('h-percentile').textContent='Top '+(100-r.percentile).toFixed(0)+'%';
+    }
+  }catch(e){}
+}
+
+// ── Devices ────────────────────────────────────────────────
+async function loadDevices(){
+  if(!homeId) return;
+  try{
+    const devs=await apiFetch('/homes/'+homeId+'/devices');
+    document.getElementById('device-list').innerHTML=devs.map(d=>`
+      <div class="device-row">
+        <div class="device-icon" style="background:#16a34a22;color:#16a34a">${iconFor(d.appliance_key)}</div>
+        <div style="flex:1">
+          <div class="device-name">${sanitize(d.name)}</div>
+          <div class="device-loc">${sanitize(d.location||'')} · ${sanitize(d.entity_id)}</div>
+        </div>
+        <span class="pill pill-g">${sanitize(d.appliance_key)}</span>
+      </div>`).join('');
+  }catch(e){}
+}
+
+function showAddDevice(){document.getElementById('add-device-form').style.display='block';}
+
+async function addDevice(){
+  const name=document.getElementById('dev-name').value.trim();
+  const entityId=document.getElementById('dev-entity').value.trim();
+  const appKey=document.getElementById('dev-type').value;
+  const loc=document.getElementById('dev-location').value.trim();
+  if(!name||!entityId){toast('Name and Entity ID required',true);return;}
+  try{
+    await apiFetch('/homes/'+homeId+'/devices',{method:'POST',body:JSON.stringify({name,entity_id:entityId,appliance_key:appKey,location:loc})});
+    toast('Device added!');
+    document.getElementById('add-device-form').style.display='none';
+    loadDevices();
+  }catch(e){toast('Error: '+e.message,true);}
+}
+
+// ── Notifications ──────────────────────────────────────────
+let nFilter='all';
+async function loadNotifications(){
+  try{
+    const notifs=await apiFetch('/notifications/?limit=30&filter='+nFilter);
+    const el=document.getElementById('notif-list');
+    if(!notifs.length){el.innerHTML='<div class="loading">No notifications</div>';return;}
+    el.innerHTML=notifs.map(n=>notifHTML(n,true)).join('');
+  }catch(e){}
+}
+function filterNotifs(f){
+  nFilter=f;
+  document.querySelectorAll('.toggle button').forEach((b,i)=>{
+    b.classList.toggle('on',['all','unread','action_required','critical'][i]===f);
+  });
+  loadNotifications();
+}
+
+function notifHTML(n,showActions=false){
+  const time=new Date(n.created_at).toLocaleString('en-GB',{timeStyle:'short',dateStyle:'short'});
+  return `<div class="notif-item ${n.severity}" style="${n.is_read?'opacity:.65':''}">
+    <div class="notif-title">${sanitize(n.title)}</div>
+    <div class="notif-msg">${sanitize(n.message)}</div>
+    ${n.action_hint?`<div style="font-size:.72rem;color:#f59e0b;margin-top:4px">💡 ${sanitize(n.action_hint)}</div>`:''}
+    <div class="notif-time">${time}${n.requires_user_action&&!n.dismissed?' · <span style="color:#f59e0b">Action needed</span>':''}</div>
+    ${showActions&&n.requires_user_action&&!n.dismissed?`<div class="notif-actions">
+      <button class="btn btn-g btn-sm" onclick="recordDecision(${n.id},'ACCEPTED')">✅ Done it!</button>
+      <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'DEFERRED')">⏰ Later</button>
+      <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'REJECTED')">❌ Skip</button>
+    </div>`:''}
+  </div>`;
+}
+
+async function recordDecision(notifId, type){
+  try{
+    await apiFetch('/decisions/',{method:'POST',body:JSON.stringify({notification_id:notifId,decision_type:type})});
+    toast(type==='ACCEPTED'?'✅ Great! We\'ll track your savings.':type==='DEFERRED'?'⏰ Reminder set!':'Noted.');
+    loadNotifications();
+  }catch(e){toast('Error: '+e.message,true);}
+}
+
+// ── Goals ─────────────────────────────────────────────────
+async function loadGoals(){
+  try{
+    const goals=await apiFetch('/goals/');
+    const el=document.getElementById('goals-list');
+    if(!goals.length){el.innerHTML='<div class="loading">No goals set. Create one above!</div>';return;}
+    el.innerHTML=goals.map(g=>{
+      const pct=Math.min((g.current_kwh||0)/g.target_kwh*100,100);
+      const cls=pct>=100?'over':pct>=80?'warn':'';
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="goal-row">
+          <div class="goal-info">
+            <div class="goal-name">${g.goal_type.charAt(0).toUpperCase()+g.goal_type.slice(1)} Goal: ${g.target_kwh} kWh</div>
+            <div class="goal-details">Since ${g.start_date} · Device: ${g.device_id||'Whole home'}</div>
+          </div>
+          <span class="pill ${pct>=100?'pill-r':pct>=80?'pill-a':'pill-g'}">${pct>=100?'Over limit':pct>=80?'Near limit':'On track'}</span>
+        </div>
+        <div class="prog-wrap"><div class="prog ${cls}" style="width:${pct}%"></div></div>
+        <div style="font-size:.72rem;color:var(--mu);margin-top:4px">${(g.current_kwh||0).toFixed(2)} / ${g.target_kwh} kWh</div>
+      </div>`;
+    }).join('');
+  }catch(e){}
+}
+
+async function createGoal(){
+  const gtype=document.getElementById('g-type').value;
+  const tgt=parseFloat(document.getElementById('g-kwh').value);
+  if(!tgt||tgt<=0){toast('Enter a valid kWh target',true);return;}
+  try{
+    const today=new Date().toISOString().split('T')[0];
+    await apiFetch('/goals/',{method:'POST',body:JSON.stringify({goal_type:gtype,target_kwh:tgt,start_date:today})});
+    toast('Goal set!');
+    document.getElementById('g-kwh').value='';
+    loadGoals();
+  }catch(e){toast('Error: '+e.message,true);}
+}
+
+// ── Ranking ────────────────────────────────────────────────
+async function loadRanking(){
+  try{
+    const ranks=await apiFetch('/rankings/me?period=DAILY&limit=30');
+    if(ranks.length){
+      const r=ranks[0];
+      document.getElementById('r-pos').textContent='#'+r.rank_position;
+      document.getElementById('r-pct').textContent='Top '+(100-r.percentile).toFixed(0)+'% of community';
+      document.getElementById('r-score').textContent=(r.overall_score||0).toFixed(0);
+      document.getElementById('score-ring').style.setProperty('--pct',r.overall_score||70);
+      document.getElementById('score-breakdown').innerHTML=`
+        <div style="padding:6px 0;border-bottom:1px solid var(--bd)">Efficiency Score<span style="float:right;font-weight:600">${(r.efficiency_score||0).toFixed(0)}%</span></div>
+        <div style="padding:6px 0;border-bottom:1px solid var(--bd)">Goal Adherence<span style="float:right;font-weight:600">${(r.goal_adherence_score||0).toFixed(0)}%</span></div>
+        <div style="padding:6px 0">Decision Score<span style="float:right;font-weight:600">${(r.decision_response_score||0).toFixed(0)}%</span></div>`;
+    }
+  }catch(e){}
+
+  try{
+    const impact=await apiFetch('/decisions/impact-report');
+    document.getElementById('impact-detail').innerHTML=`
+      <div style="padding:6px 0;border-bottom:1px solid var(--bd)">Decisions Made<span style="float:right;font-weight:600">${impact.total_decisions}</span></div>
+      <div style="padding:6px 0;border-bottom:1px solid var(--bd)">Energy Saved<span style="float:right;font-weight:600">${(impact.total_energy_saved_kwh||0).toFixed(2)} kWh</span></div>
+      <div style="padding:6px 0;border-bottom:1px solid var(--bd)">Cost Saved<span style="float:right;font-weight:600">£${(impact.total_cost_saved_gbp||0).toFixed(2)}</span></div>
+      <div style="padding:6px 0">Avg Effectiveness<span style="float:right;font-weight:600">${(impact.avg_effectiveness_score||0).toFixed(0)}%</span></div>`;
+  }catch(e){}
+
+  try{
+    const lb=await apiFetch('/rankings/leaderboard?period=DAILY');
+    document.getElementById('leaderboard').innerHTML=lb.leaderboard.slice(0,10).map(r=>`
+      <div class="device-row">
+        <div style="font-weight:700;width:30px;color:${r.rank<=3?'var(--amber)':'var(--mu)'}; text-align:center">#${r.rank}</div>
+        <div style="flex:1"><div style="font-size:.875rem">${sanitize(r.home_name)}</div></div>
+        <div style="text-align:right"><div style="font-weight:600">${(r.overall_score||0).toFixed(0)}</div><div style="font-size:.7rem;color:var(--mu)">${r.total_kwh.toFixed(2)} kWh</div></div>
+      </div>`).join('');
+  }catch(e){}
+}
+
+function iconFor(key){
+  const m={kettle:'☕',washing_machine:'👕',dryer:'🔄',dishwasher:'🍽️',microwave:'📡',gaming_console:'🎮',toaster:'🍞',xbox:'🎮',cooker:'🍳',other:'🔌'};
+  return m[key]||'🔌';
+}
+
+const loaders={home:loadHome,devices:loadDevices,notifications:loadNotifications,goals:loadGoals,ranking:loadRanking};
+init();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Keep the app usable even if service worker registration fails.
+    });
+  });
+}
+
+window.addEventListener('offline', () => toast('You are offline. Showing cached data where possible.', true));
+window.addEventListener('online', () => toast('Connection restored. Syncing latest data...'));
+</script>
+</body>
+</html>

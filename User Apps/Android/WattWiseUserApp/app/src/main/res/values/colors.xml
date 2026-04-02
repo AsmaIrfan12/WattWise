@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- WattWise Brand — Energy Green palette -->
+    <color name="primary">#16A34A</color>        <!-- Emerald green — energy -->
+    <color name="primary_dark">#15803D</color>   <!-- Darker green -->
+    <color name="primary_light">#DCFCE7</color>  <!-- Light green surface -->
+    <color name="accent">#0EA5E9</color>          <!-- Sky blue — data -->
+
+    <!-- Semantic -->
+    <color name="success">#16A34A</color>
+    <color name="success_light">#DCFCE7</color>
+    <color name="warning">#F59E0B</color>         <!-- Amber — warnings -->
+    <color name="warning_light">#FEF3C7</color>
+    <color name="danger">#EF4444</color>           <!-- Red — critical alerts -->
+    <color name="danger_light">#FEE2E2</color>
+    <color name="peak_tariff">#F97316</color>      <!-- Orange — peak electricity -->
+
+    <!-- Surfaces (Dark mode friendly) -->
+    <color name="background">#0F172A</color>      <!-- Slate dark -->
+    <color name="surface">#1E293B</color>          <!-- Slate card -->
+    <color name="surface_variant">#334155</color>
+    <color name="border">#334155</color>
+
+    <!-- Text -->
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_tertiary">#64748B</color>
+
+    <!-- Status indicators -->
+    <color name="status_connected">#16A34A</color>
+    <color name="status_connecting">#FBBF24</color>
+    <color name="status_error">#EF4444</color>
+
+    <!-- Launcher -->
+    <color name="ic_launcher_background">#16A34A</color>
+</resources>

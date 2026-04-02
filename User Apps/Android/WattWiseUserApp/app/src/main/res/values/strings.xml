@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WattWise</string>
+    <string name="app_subtitle">Smart Energy Monitoring</string>
+
+    <!-- Server settings -->
+    <string name="server_url_label">Server URL</string>
+    <string name="server_port_label">Port</string>
+    <string name="server_url_hint">https://your-wattwise-server.com</string>
+    <string name="save_settings">Save Settings</string>
+    <string name="test_connection">Test Connection</string>
+    <string name="connection_success">Connected to WattWise server ✓</string>
+    <string name="connection_failed">Could not reach WattWise server</string>
+    <string name="connection_testing">Testing connection…</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Dashboard</string>
+    <string name="nav_devices">Devices</string>
+    <string name="nav_notifications">Alerts</string>
+    <string name="nav_goals">Goals</string>
+    <string name="nav_ranking">Ranking</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Splash -->
+    <string name="splash_tagline">Track. Save. Compete.</string>
+
+    <!-- General -->
+    <string name="retry">Retry</string>
+    <string name="loading">Loading…</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="no_internet">No internet connection</string>
+    <string name="developer_credit">Developed by Mr. Suhas Devmane, Cardiff University</string>
+
+    <!-- Permissions -->
+    <string name="permission_notification_rationale">WattWise needs notification permission to alert you about energy usage and goal progress.</string>
+    <string name="permission_location_rationale">WattWise uses your location to register your home\'s address for energy benchmarking.</string>
+</resources>

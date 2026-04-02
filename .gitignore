@@ -1,0 +1,33 @@
+# ── Environment files (secrets) ──────────────────
+.env
+Server Side/.env
+
+# ── Node modules (if any remain) ──────────────────
+node_modules/
+
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ── Android Studio ────────────────────────────────
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+*.apk
+*.aab
+google-services.json
+
+# ── Docker ────────────────────────────────────────
+mosquitto/config/passwd
+
+# ── OS ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+deployment.txt

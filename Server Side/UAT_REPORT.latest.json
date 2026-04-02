@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-03-30T12:40:12.093643",
+  "api_base": "http://localhost:8000",
+  "checks_total": 11,
+  "checks_failed": 0,
+  "checks": [
+    {
+      "name": "api_health",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "api_dependencies",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "admin_frontend",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "user_frontend",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "admin_login",
+      "ok": true,
+      "detail": "user_id=17"
+    },
+    {
+      "name": "admin_dashboard",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "user_login",
+      "ok": true,
+      "detail": "user_id=3"
+    },
+    {
+      "name": "user_homes",
+      "ok": true,
+      "detail": "status=200 count=3"
+    },
+    {
+      "name": "user_devices",
+      "ok": true,
+      "detail": "status=200 count=3"
+    },
+    {
+      "name": "reading_ingest",
+      "ok": true,
+      "detail": "status=201"
+    },
+    {
+      "name": "home_today_summary",
+      "ok": true,
+      "detail": "status=200"
+    }
+  ],
+  "status": "PASS"
+}
