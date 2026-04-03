@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Make WattWise deployable on a DigitalOcean droplet at reserved IP `129.212.163.88` using HTTP (HTTPS/Let's Encrypt added later when a domain is attached), while keeping the existing setup working on the dev laptop unchanged. RPi publishers must be able to send data to the cloud server. Admin must be able to view, compare, and back up all user data.
+Make WattWise deployable on a DigitalOcean droplet at reserved IP `129.212.138.248` using HTTP (HTTPS/Let's Encrypt added later when a domain is attached), while keeping the existing setup working on the dev laptop unchanged. RPi publishers must be able to send data to the cloud server. Admin must be able to view, compare, and back up all user data.
 
 ---
 
@@ -44,7 +44,7 @@ All 8 existing services remain. No services added or removed.
 
 ## 4. nginx Routing (Updated)
 
-`server_name _` catch-all replaces the Cloudflare-specific hostname. Works on both `localhost` and `129.212.163.88`.
+`server_name _` catch-all replaces the Cloudflare-specific hostname. Works on both `localhost` and `129.212.138.248`.
 
 | Path | Upstream | Notes |
 |------|----------|-------|
@@ -160,15 +160,15 @@ Two connection options documented in `rpi_publisher_config.yaml`:
 
 ```yaml
 # Option A — WebSocket via nginx (port 80):
-host: "129.212.163.88"
+host: "129.212.138.248"
 port: 80
 transport: "websockets"
 ws_path: "/mqtt"
 
 # Option B — Direct MQTT TCP (port 1883):
-# host: "129.212.163.88"
-# port: 1883
-# transport: "tcp"
+host: "129.212.138.248"
+port: 1883
+transport: "tcp"
 ```
 
 ---
@@ -180,7 +180,7 @@ ws_path: "/mqtt"
 - `STRICT_SECURITY=false` (weak dev secrets are acceptable)
 
 ### Production `.env` (filled from `.env.production.template`)
-- `ALLOWED_ORIGINS=http://129.212.163.88,http://129.212.163.88:80`
+- `ALLOWED_ORIGINS=http://129.212.138.248,http://129.212.138.248:80`
 - `SECRET_KEY=<64-char random string>`
 - `MYSQL_ROOT_PASSWORD=<strong password>`
 - `MYSQL_PASSWORD=<strong password>`
@@ -194,7 +194,7 @@ ws_path: "/mqtt"
 ## 12. HTTPS Upgrade Path (future)
 
 When a domain is attached:
-1. Add domain A record → `129.212.163.88`
+1. Add domain A record → `129.212.138.248`
 2. Add a `certbot` service to `docker-compose.production.yml`
 3. Uncomment the HTTPS server block in `nginx.conf`
 4. Update `ALLOWED_ORIGINS` in `.env` to use `https://`
@@ -207,11 +207,11 @@ No structural changes required — the architecture is already prepared.
 ## 13. Success Criteria
 
 - `docker compose -f docker-compose.yml -f docker-compose.production.yml up -d` starts all 8 services healthy
-- `http://129.212.163.88/` loads user dashboard
-- `http://129.212.163.88/admin/` loads admin dashboard
-- `http://129.212.163.88/health` returns `{"status": "ok"}`
-- `http://129.212.163.88/api/auth/login` accepts admin credentials
-- RPi publisher connects to `129.212.163.88:1883` (TCP) or port 80 (WebSocket) and data appears in DB
+- `http://129.212.138.248/` loads user dashboard
+- `http://129.212.138.248/admin/` loads admin dashboard
+- `http://129.212.138.248/health` returns `{"status": "ok"}`
+- `http://129.212.138.248/api/auth/login` accepts admin credentials
+- RPi publisher connects to `129.212.138.248:1883` (TCP) or port 80 (WebSocket) and data appears in DB
 - Admin can download a backup `.sql.gz` from `/api/admin/backup/download`
 - Admin can toggle auto-backup on/off via `/api/admin/backup/settings`
 - All named volumes persist across `docker compose restart`
