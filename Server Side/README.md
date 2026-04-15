@@ -1,181 +1,274 @@
-# WattWise — Server Side
+# WattWise Server-Side — Production Deployment Guide
 
-Cloud backend for the WattWise community energy monitoring platform. Runs as a Docker Compose stack on a single Linux host, exposed to the internet via Cloudflare Tunnel.
+> **Author:** Mr. Suhas Devmane, Cardiff University, UK  
+> **Supervisor:** Prof. Reza Sahandi, Cardiff University  
+> **Version:** 2.1.0 | Community Energy Management Platform
 
 ---
 
-## Architecture
+## Architecture Overview
 
 ```
-Raspberry Pi (Home Assistant + smart plugs)
-  └── rpi_mqtt_publisher.py
-        └── MQTT over WebSocket (wss://.../mqtt)
-              └── Mosquitto broker (port 9001 WS / 1883 TCP)
-                    └── FastAPI mqtt_client.py subscriber
-                          ├── MySQL 8.0  — relational data (users, homes, devices, goals, decisions)
-                          └── InfluxDB 1.8 — time-series energy readings
-                                └── APScheduler (8 cron jobs: aggregation, rankings, notifications)
-                                      └── Expo Push API → Android app
+Internet / RPi
+     │
+     ▼
+┌────────────────────────────────────────────────────┐
+│  Nginx Reverse Proxy  (Port 80 / 443)               │
+│  ├─ /          → user-frontend  (nginx:3001)        │
+│  ├─ /admin/    → owner-frontend (nginx:3000)        │
+│  ├─ /api/      → FastAPI backend (uvicorn:8000)     │
+│  ├─ /ws/       → FastAPI WebSocket                  │
+│  └─ /mqtt      → Mosquitto WebSocket (9001)         │
+└────────────────────────────────────────────────────┘
+     │               │                │
+     ▼               ▼                ▼
+ FastAPI          MySQL DB        InfluxDB
+ (Async)       (Relational)   (Time-series)
+     │
+     ▼
+ Mosquitto (MQTT broker, port 1883 + WS 9001)
+     ▲
+     │
+ RPi Smart Home Assistant → publishes readings via MQTT/HTTPS
 ```
-
-### Services
-
-| Service | Image | Port | Purpose |
-|---------|-------|------|---------|
-| `mosquitto` | eclipse-mosquitto:2 | 1883 (TCP), 9001 (WS) | MQTT broker for sensor ingestion |
-| `mysql` | mysql:8.0 | 3307 (host) | Relational database |
-| `influxdb` | influxdb:1.8 | 8086 | Time-series energy telemetry |
-| `backend` | python:3.12-slim (built) | 8000 | FastAPI REST API + MQTT subscriber |
-| `admin-dashboard` | nginx:alpine (built) | 3000 | Owner/admin web portal |
-| `user-dashboard` | nginx:alpine (built) | 3001 | Resident web portal (loaded in Android WebView) |
-| `nginx-proxy` | nginx:alpine (built) | 80, 443 | Reverse proxy (TLS terminated by Cloudflare) |
-| `mysql-backup` | mysql:8.0 | — | Daily database backup (30-day retention) |
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Copy and configure environment
+# 1. Clone and configure
 cp .env.production.template .env
-# Edit .env — replace all REPLACE_* values with strong secrets
+# Edit .env — set all secrets
 
-# 2. Start all services
-cd "Server Side"
-docker compose up -d --build
+# 2. Configure MQTT authentication
+bash mosquitto/scripts/setup_mqtt_passwords.sh
 
-# 3. Verify all services healthy
-docker compose ps
-docker compose logs -f backend
+# 3. Start all services
+docker compose up -d
 
-# 4. Access dashboards
-# Admin:  http://localhost:3000
-# User:   http://localhost:3001
-# API:    http://localhost:8000/docs
+# 4. Apply database migrations
+docker exec wattwise-backend alembic upgrade head
+
+# 5. Verify health
+curl http://localhost/health
 ```
 
 ---
 
-## Configuration
+## Environment Variables (`.env`)
 
-All configuration is via environment variables in `Server Side/.env`. Template: `.env.production.template`.
-
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | MySQL connection string |
-| `INFLUX_HOST/DB/USER/PASS` | InfluxDB connection |
-| `MQTT_BROKER_HOST/PORT` | Mosquitto connection |
-| `SECRET_KEY` | JWT signing key (generate: `python -c "import secrets; print(secrets.token_urlsafe(64))"`) |
-| `ADMIN_EMAIL/PASSWORD` | Admin account credentials |
-| `ALLOWED_ORIGINS` | CORS origins (comma-separated) |
-| `ENERGY_PEAK_START_HOUR/END_HOUR` | UK peak tariff window (default 16–19) |
-| `SMTP_HOST/USER/PASSWORD` | Email for weekly reports (optional) |
-
----
-
-## Database Schema
-
-MySQL database (`wattwise_db`) contains 15 tables:
-
-**Core:**
-- `users` — accounts with push tokens and energy goals
-- `homes` — one or more homes per user
-- `devices` — smart plugs mapped to HA entity IDs
-- `energy_readings` — raw MQTT-ingested readings (power_watts, energy_kwh, current_amps)
-- `hourly_summary` / `daily_summary` — pre-aggregated per-device stats
-- `home_daily_totals` — whole-home aggregation for rankings
-
-**Research (PhD):**
-- `user_decisions` — accept/reject/defer responses to energy notifications (response time, effectiveness score)
-- `user_interaction_logs` — 13 interaction types for behavioural analytics
-- `energy_rankings` — daily community leaderboard (efficiency, goal adherence, decision score)
-- `notifications` — push + in-app notifications with severity and action hints
-- `energy_goals` — per-device and whole-home energy targets
-- `notification_templates` — reusable admin broadcast templates
-
-InfluxDB stores the same readings as an `energy_readings` measurement for time-series charting (InfluxQL queries, not Flux).
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SECRET_KEY` | JWT signing secret (≥32 chars) | `openssl rand -hex 32` |
+| `DATABASE_URL` | MySQL async connection string | `mysql+aiomysql://user:pass@mysql/wattwise` |
+| `INFLUX_HOST` | InfluxDB hostname | `wattwise-influxdb` |
+| `INFLUX_PORT` | InfluxDB port | `8086` |
+| `INFLUX_USER` | InfluxDB username | `wattwise` |
+| `INFLUX_PASS` | InfluxDB password | `strong_pass` |
+| `INFLUX_DB` | InfluxDB database name | `wattwise` |
+| `MQTT_BROKER_HOST` | Mosquitto container name | `wattwise-mosquitto` |
+| `MQTT_BROKER_PORT` | MQTT port | `1883` |
+| `MQTT_USERNAME` | Backend MQTT client username | `wattwise_backend` |
+| `MQTT_PASSWORD` | Backend MQTT client password | `strong_mqtt_pass` |
+| `MQTT_TOPIC_PREFIX` | Base topic prefix | `wattwise/homes` |
+| `ADMIN_EMAIL` | Initial admin account email | `admin@wattwise.io` |
+| `ADMIN_PASSWORD` | Initial admin password | `change_immediately` |
+| `ALLOWED_ORIGINS` | CORS allowed origins (comma-sep) | `https://wattwise.io,https://admin.wattwise.io` |
+| `LOG_FORMAT` | `text` or `json` (production: use `json`) | `json` |
+| `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING` | `INFO` |
+| `STRICT_SECURITY` | `true` = block startup on config warnings | `true` |
 
 ---
 
-## API Endpoints
+## Services
 
-Base: `http://localhost:8000/api`
-Interactive docs: `http://localhost:8000/docs`
-
-| Router | Prefix | Key Endpoints |
-|--------|--------|---------------|
-| Auth | `/api/auth` | POST /signup, /login, /logout, GET /me |
-| Devices | `/api` | CRUD /homes, /homes/{id}/devices |
-| Readings | `/api/readings` | GET historical, POST manual ingest |
-| Goals | `/api/goals` | CRUD goals, GET /{id}/progress |
-| Decisions | `/api/decisions` | POST record decision, GET impact report |
-| Notifications | `/api/notifications` | GET list, PATCH /read-all, PATCH /{id}/dismiss |
-| Analysis | `/api/analysis` | GET summary, peak usage, leaderboard |
-| Admin | `/api/admin` | GET dashboard, POST send-notification, GET users |
-| Export | `/api/export` | GET CSV exports |
-
-Public paths (no auth): `/`, `/health`, `/docs`, `/api/auth/signup`, `/api/auth/login`, `/api/rankings/leaderboard`
+| Service | Container | Port | Purpose |
+|---------|-----------|------|---------|
+| FastAPI Backend | `wattwise-backend` | 8000 (internal) | Main API, MQTT ingestion |
+| MySQL | `wattwise-mysql` | 3306 (internal) | Relational data store |
+| InfluxDB | `wattwise-influxdb` | 8086 (internal) | Time-series energy readings |
+| Mosquitto | `wattwise-mosquitto` | 1883 + 9001 | MQTT broker |
+| Admin Frontend | `wattwise-admin-frontend` | 3000 (internal) | Owner admin portal |
+| User Frontend | `wattwise-user-frontend` | 3001 (internal) | User energy dashboard |
+| Nginx Proxy | `wattwise-nginx` | 80, 443 | Reverse proxy + TLS termination |
 
 ---
 
-## MQTT Topic Convention
-
-```
-wattwise/homes/{home_id}/devices/{entity_id}/data
-```
-
-Payload (JSON):
-```json
-{
-  "home_id": "home_001",
-  "entity_id": "kettle_current_consumption",
-  "power_watts": 2100.5,
-  "energy_kwh": 0.583,
-  "current_amps": 9.13,
-  "voltage_volts": 230.0,
-  "switch_state": "on",
-  "timestamp": "2026-03-30T14:23:00Z"
-}
-```
-
----
-
-## Scheduled Jobs (APScheduler)
-
-| Job | Schedule | Purpose |
-|-----|----------|---------|
-| Hourly aggregation | Every 30 min | Roll raw readings → hourly_summary |
-| Daily aggregation | 00:15 | Roll hourly → daily_summary + home_daily_totals |
-| Goal check | Every hour | Detect goal breaches, send notifications |
-| Peak reminder | 15:45 daily | Alert users before peak tariff window |
-| Daily report | 07:00 daily | Summary notification to all users |
-| Decision impact | Every 2 hours | Calculate energy_before/after for accepted decisions |
-| Rankings | 01:30 daily | Recompute community leaderboard |
-| Weekly email | Monday 08:00 | Email digest with charts |
-
----
-
-## Admin Access
-
-Default admin account is bootstrapped via `mysql/init/01-schema.sql`. To reset:
+## Database Migrations
 
 ```bash
-# Generate new password hash
-docker compose exec backend python3 scripts/generate_admin_hash.py
+# Run migrations inside backend container
+docker exec wattwise-backend alembic upgrade head
 
-# Update in MySQL
-docker compose exec mysql mysql -u root -p wattwise_db \
-  -e "UPDATE users SET password_hash='<new_hash>' WHERE email='admin@wattwise.co.uk';"
+# Generate a new migration after model changes
+docker exec wattwise-backend alembic revision --autogenerate -m "your description"
+```
+
+### Manual Migration (if Alembic not used)
+
+Schema changes to apply:
+```sql
+-- UniqueConstraint on energy readings (prevents duplicate RPi data)
+ALTER TABLE energy_readings ADD UNIQUE INDEX uq_reading_device_time (device_id, recorded_at);
+
+-- CheckConstraint (non-negative power)
+ALTER TABLE energy_readings ADD CONSTRAINT chk_power_non_negative CHECK (power_watts >= 0);
+
+-- Admin audit log table
+CREATE TABLE admin_audit_logs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  admin_user_id INT NOT NULL,
+  action_type VARCHAR(64) NOT NULL,
+  target_user_id INT NULL,
+  details_json JSON NULL,
+  ip_address VARCHAR(45) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ---
 
-## Backups
+## MQTT Setup
 
-The `mysql-backup` service runs daily and stores compressed SQL dumps in `./backups/`. Files older than 30 days are automatically removed.
+### RPi Publisher Configuration
 
-To restore:
-```bash
-gunzip < backups/wattwise-20260330-020001.sql.gz | \
-  docker compose exec -T mysql mysql -u wattwise_app -p wattwise_db
+Each RPi home hub publishes readings to:
 ```
+Topic: wattwise/homes/{home_id}/{entity_id}
+Payload: {"power_watts": 1200.5, "current_amps": 5.2, "voltage_volts": 230.0, "energy_kwh": 0.05}
+```
+
+### Adding a New Home's RPi Credentials
+
+```bash
+# On the host (not inside container):
+docker exec -it wattwise-mosquitto mosquitto_passwd /etc/mosquitto/passwd rpi_home_X
+# Then restart mosquitto:
+docker restart wattwise-mosquitto
+```
+
+---
+
+## Admin Portal
+
+Access at: `http://<server-ip>/admin/`
+
+| Feature | Description |
+|---------|-------------|
+| **Dashboard** | Live KPIs, community energy, decision impact, top rankings |
+| **User Management** | Search, filter by persona, toggle notifications, reset passwords |
+| **Personas** | View/manage 5 behavioral groups; run the classifier manually |
+| **Rankings** | Full leaderboard for daily/weekly/monthly periods |
+| **Analytics** | Custom date-range energy trends + CSV export |
+| **Devices/RPi** | Online/offline status, last-seen, last power reading |
+| **Notifications** | Send broadcasts to all/specific/persona-filtered users |
+| **Audit Log** | Full record of all admin actions with IP and timestamps |
+| **Backups** | Trigger, list, and download database backups |
+
+---
+
+## User Dashboard
+
+Access at: `http://<server-ip>/`
+
+| Feature | Description |
+|---------|-------------|
+| **Home** | KPIs, bill prediction, device breakdown, community benchmark |
+| **Energy Analytics** | Period selector (today/7d/30d/custom), CSV export, device pie chart |
+| **Devices** | Register and manage smart home devices |
+| **Alerts** | View/action notifications with ACCEPTED/DEFERRED/REJECTED decisions |
+| **Goals** | Set daily/weekly/monthly energy goals; track progress |
+| **Ranking** | Community leaderboard, score ring, ranking history chart |
+| **Settings** | Toggle notifications, set goals/budget, export data |
+
+---
+
+## Persona Classification
+
+Users are automatically classified weekly (Sunday 02:00 UTC):
+
+| Persona | Criteria |
+|---------|----------|
+| **Eco Champion** | Efficiency ≥ 75%, Goal Adherence ≥ 80% |
+| **Active Improver** | Improving trend + Efficiency ≥ 55% + Adherence ≥ 50% |
+| **Steady User** | Default — moderate usage, no strong trend |
+| **High Consumer** | Efficiency ≤ 40%, Goal Adherence ≤ 30% |
+| **Disengaged** | < 3 ranking days or very low interaction |
+
+Admin can also trigger classification manually or override individual users.
+
+---
+
+## Scheduled Jobs
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Hourly aggregation | Every hour | Aggregate InfluxDB readings → MySQL |
+| Daily aggregation | 1:00 AM | Compute daily totals and device summaries |
+| Goal checks | Every 2 hours | Check goal progress, send alerts |
+| Rankings compute | 2:30 AM | Calculate daily efficiency + leaderboard |
+| Weekly email report | Sunday 8:00 AM | Community summary via SMTP |
+| Persona classifier | Sunday 2:00 AM | Re-classify all users |
+| Peak-time reminder | 5:00 PM | Alert users during peak tariff hours |
+
+---
+
+## Backup & Recovery
+
+```bash
+# Create a backup
+curl -X POST http://localhost/api/backup/create \
+  -H "Authorization: Bearer <admin_token>"
+
+# List backups
+curl http://localhost/api/backup/list \
+  -H "Authorization: Bearer <admin_token>"
+
+# Download backup
+curl http://localhost/api/backup/download/<filename> \
+  -H "Authorization: Bearer <admin_token>" -o backup.sql.gz
+```
+
+---
+
+## Testing
+
+```bash
+cd backend
+python -m pytest tests/ -v
+```
+
+Test coverage:
+- MQTT input validation (NaN, negative, implausible values)
+- Admin community snapshot calculations
+- Persona classification logic
+- JWT claims structure
+- Security config warnings
+- DB constraint verification
+- N+1 query regression tests
+
+---
+
+## Security Features
+
+- ✅ JWT claims contain `is_admin` flag (no per-request DB lookup)
+- ✅ Content-Security-Policy on all frontends
+- ✅ MQTT broker authentication (username/password per client)
+- ✅ Input validation on all MQTT readings (reject NaN/negative/implausible)
+- ✅ Duplicate reading guard (5-second window)
+- ✅ Entity ID sanitization (regex, prevents injection)
+- ✅ Admin audit log (all sensitive actions recorded)
+- ✅ Rate limiting (Nginx — 10 req/min auth, 60 req/min API)
+- ✅ DB constraints (UniqueConstraint + CheckConstraint on energy_readings)
+- ✅ Startup security warning system
+
+---
+
+## Research Note
+
+> This platform was developed as part of an MSc/PhD research project in community energy
+> monitoring at Cardiff University. The system is designed to support community-scale
+> energy behavioural studies with full data provenance and audit capabilities.
+>
+> For academic collaboration, contact: devmanes@cardiff.ac.uk

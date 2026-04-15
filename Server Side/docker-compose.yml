@@ -125,6 +125,9 @@ services:
         condition: service_started
       influxdb:
         condition: service_started
+    environment:
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - backups_data:/backups
     deploy:

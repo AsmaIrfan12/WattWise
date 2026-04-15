@@ -1,10 +1,7 @@
-"""
-WattWise FastAPI Application
-==============================
-Main entry point. Handles lifecycle, middleware (JWT auth), and router registration.
-"""
-
+import os
+import json
 import logging
+import logging.config
 from datetime import datetime
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -29,7 +26,42 @@ from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+def _configure_logging():
+    """Configure structured JSON logging for production or human-readable for dev."""
+    log_format = os.getenv("LOG_FORMAT", "text").lower()
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    if log_format == "json":
+        # Structured JSON — compatible with Grafana Loki, Datadog, CloudWatch
+        try:
+            from pythonjsonlogger import jsonlogger
+
+            class _WattwiseJsonFormatter(jsonlogger.JsonFormatter):
+                def add_fields(self, log_record, record, message_dict):
+                    super().add_fields(log_record, record, message_dict)
+                    log_record["service"] = "wattwise-backend"
+                    log_record["level"] = record.levelname
+                    log_record["ts"] = datetime.utcnow().isoformat() + "Z"
+
+            handler = logging.StreamHandler()
+            handler.setFormatter(_WattwiseJsonFormatter("%(message)s %(name)s %(levelname)s"))
+            logging.root.handlers = [handler]
+            logging.root.setLevel(log_level)
+        except ImportError:
+            # pythonjsonlogger not installed — fall back to text
+            logging.basicConfig(
+                level=log_level,
+                format="%(asctime)s %(name)s %(levelname)s %(message)s"
+            )
+    else:
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s"
+        )
+
+
+_configure_logging()
 logger = logging.getLogger("main")
 
 scheduler = AsyncIOScheduler()

@@ -29,3 +29,10 @@ apscheduler==3.10.4
 # Utilities
 python-multipart==0.0.20
 python-dotenv==1.0.1
+
+# Observability — structured JSON logging (set LOG_FORMAT=json in production)
+python-json-logger==2.0.7
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
