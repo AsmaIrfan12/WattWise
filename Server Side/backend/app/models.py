@@ -4,13 +4,26 @@ from datetime import datetime, date
 from sqlalchemy import (
     Column, Integer, BigInteger, SmallInteger,
     String, Float, Boolean, DateTime, Date, Enum, Text, JSON,
-    ForeignKey, Index, UniqueConstraint
+    ForeignKey, Index, UniqueConstraint, CheckConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+# ── PERSONAS ───────────────────────────────────────────────
+class Persona(Base):
+    __tablename__ = "personas"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    criteria = Column(JSON, nullable=	True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    users = relationship("User", back_populates="persona")
 
 
 # ── USERS ────────────────────────────────────────────────────
@@ -24,6 +37,7 @@ class User(Base):
     push_token = Column(String(512), nullable=True)
     notifications_enabled = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    persona_id = Column(Integer, ForeignKey("personas.id", ondelete="SET NULL"), nullable=True)
     reset_token = Column(String(256), nullable=True)
     reset_token_expiry = Column(DateTime, nullable=True)
     daily_energy_goal_kwh = Column(Float, nullable=True)
@@ -35,6 +49,7 @@ class User(Base):
     homes = relationship("Home", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     decisions = relationship("UserDecision", back_populates="user", cascade="all, delete-orphan")
+    persona = relationship("Persona", back_populates="users", uselist=False)
     goals = relationship("EnergyGoal", back_populates="user", cascade="all, delete-orphan")
     rankings = relationship("EnergyRanking", back_populates="user", cascade="all, delete-orphan")
 
@@ -115,6 +130,10 @@ class EnergyReading(Base):
 
     __table_args__ = (
         Index("idx_readings_device_time", "device_id", "recorded_at"),
+        # Prevent duplicate readings for same device at same timestamp
+        UniqueConstraint("device_id", "recorded_at", name="uq_reading_device_time"),
+        # Data quality: power cannot be negative
+        CheckConstraint("power_watts >= 0", name="chk_power_non_negative"),
     )
 
 
@@ -368,4 +387,30 @@ class EnergyRanking(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "period_type", "period_start", name="uq_ranking"),
         Index("idx_ranking_period", "period_type", "period_start", "overall_score"),
+    )
+
+
+# ── ADMIN AUDIT LOG ───────────────────────────────────────────
+class AdminAuditLog(Base):
+    """Records every significant admin action for accountability and research auditing."""
+    __tablename__ = "admin_audit_logs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    admin_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action_type = Column(
+        Enum(
+            "SEND_NOTIFICATION", "ASSIGN_PERSONA", "TOGGLE_NOTIFICATIONS",
+            "RESET_PASSWORD", "BULK_OPERATION", "EDIT_USER",
+            "RUN_CLASSIFIER", "EXPORT_DATA", "BACKUP_TRIGGERED", "LOGIN",
+        ),
+        nullable=False,
+    )
+    target_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    details_json = Column(JSON, nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_audit_admin_time", "admin_user_id", "created_at"),
+        Index("idx_audit_action", "action_type", "created_at"),
     )

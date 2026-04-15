@@ -41,9 +41,10 @@ def _verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
-def _create_token(user_id: int) -> str:
+def _create_token(user_id: int, is_admin: bool = False) -> str:
     payload = {
         "sub": str(user_id),
+        "is_admin": is_admin,
         "exp": datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "iat": datetime.utcnow(),
     }
@@ -115,7 +116,7 @@ async def signup(body: SignupRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     return TokenResponse(
-        access_token=_create_token(user.id),
+        access_token=_create_token(user.id, is_admin=bool(user.is_admin)),
         user_id=user.id,
         name=user.name,
         email=user.email,
@@ -128,8 +129,8 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     client_ip = request.client.host if request.client else "unknown"
     limit_key = f"{client_ip}:{body.email.lower()}"
 
-    if login_rate_limiter.is_limited(limit_key):
-        retry_after = login_rate_limiter.retry_after_seconds(limit_key)
+    if await login_rate_limiter.is_limited(limit_key):
+        retry_after = await login_rate_limiter.retry_after_seconds(limit_key)
         raise HTTPException(
             status_code=429,
             detail="Too many failed login attempts. Please try again later.",
@@ -138,11 +139,12 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
 
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
+
     if not user or not _verify_password(body.password, user.password_hash):
-        login_rate_limiter.record_failure(limit_key)
+        await login_rate_limiter.record_failure(limit_key)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    login_rate_limiter.reset(limit_key)
+    await login_rate_limiter.reset(limit_key)
 
     user.last_login_at = datetime.utcnow()
     log = UserInteractionLog(user_id=user.id, interaction_type="LOGIN")
@@ -150,7 +152,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     await db.commit()
 
     return TokenResponse(
-        access_token=_create_token(user.id),
+        access_token=_create_token(user.id, is_admin=bool(user.is_admin)),
         user_id=user.id,
         name=user.name,
         email=user.email,

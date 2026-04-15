@@ -26,6 +26,7 @@ from app.scheduler import (
     calculate_decision_impacts, compute_rankings
 )
 from app.email_report import send_weekly_reports
+from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -93,6 +94,13 @@ async def _job_weekly_email():
     await _run_tracked_job("weekly_email", send_weekly_reports)
 
 
+async def _job_classify_personas():
+    from app.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        summary = await classify_all_users(db)
+        logger.info("Persona classification: %s", summary)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -119,6 +127,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("✅ Security posture baseline checks passed")
 
+    # Seed default personas if not already present
+    from app.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        await seed_default_personas(db)
+    logger.info("✅ Default personas seeded")
+
     # Schedule recurring jobs
     scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
     scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
@@ -127,9 +141,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
     scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
     scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
-    scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8, minute=0, id="weekly_email")
+    scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
+    scheduler.add_job(_job_classify_personas,  "cron",       day_of_week="sun", hour=2,    minute=0,  id="classify_personas")
     scheduler.start()
-    logger.info("✅ Scheduler started with 8 jobs (incl. weekly email report)")
+    logger.info("✅ Scheduler started with 9 jobs (incl. weekly persona classification)")
 
     yield
 
@@ -195,6 +210,15 @@ async def request_metrics_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self' wss: ws:; "
+        "frame-ancestors 'none';"
+    )
     logger.info(
         "request_completed request_id=%s method=%s path=%s status=%s duration_ms=%s",
         request_id,
@@ -233,22 +257,12 @@ async def auth_middleware(request: Request, call_next):
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
         user_id = int(payload["sub"])
+        # Read is_admin from JWT claim — avoids extra DB query per request.
+        # The claim is embedded at login time; re-login required to reflect changes.
+        is_admin = bool(payload.get("is_admin", False))
     except JWTError:
         metrics_store.record_auth_failure()
         return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
-
-    # Get is_admin from DB (cache in future)
-    from app.database import AsyncSessionLocal
-    from app.models import User
-    from sqlalchemy import select
-
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(User.is_admin).where(User.id == user_id))
-        row = result.one_or_none()
-        if not row:
-            metrics_store.record_auth_failure()
-            return JSONResponse({"detail": "User not found"}, status_code=401)
-        is_admin = bool(row[0])
 
     request.state.user_id = user_id
     request.state.is_admin = is_admin

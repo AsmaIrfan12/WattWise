@@ -115,6 +115,27 @@ async function loadDashboard() {
   } catch {
     // No-op; keep default loading row.
   }
+
+  try {
+    const benchmark = await api.getCommunityBenchmark();
+    const benchmarkEl = document.getElementById("community-benchmark");
+    if (!benchmark.has_data) {
+      benchmarkEl.innerHTML = '<div style="color:var(--muted)">No community totals are available yet.</div>';
+    } else {
+      benchmarkEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px">
+          <div><div class="stat-label">Latest dataset</div><div style="font-size:1.25rem;font-weight:700">${sanitize(benchmark.date)}</div><div class="stat-sub">${sanitize(benchmark.homes_with_data)} active homes with totals</div></div>
+          <div><div class="stat-label">Avg / home</div><div style="font-size:1.4rem;font-weight:700">${sanitize(formatN(benchmark.avg_home_kwh, 2))} kWh</div><div class="stat-sub">£${sanitize(formatN(benchmark.avg_home_cost_gbp, 2))} average cost</div></div>
+          <div><div class="stat-label">Community range</div><div style="font-size:1.4rem;font-weight:700">${sanitize(formatN(benchmark.min_home_kwh, 2))}–${sanitize(formatN(benchmark.max_home_kwh, 2))} kWh</div><div class="stat-sub">Across ${sanitize(benchmark.peer_homes_compared)} homes</div></div>
+          <div><div class="stat-label">Total energy</div><div style="font-size:1.4rem;font-weight:700">${sanitize(formatN(benchmark.total_kwh, 2))} kWh</div><div class="stat-sub">£${sanitize(formatN(benchmark.total_cost_gbp, 2))} total daily cost</div></div>
+        </div>`;
+    }
+  } catch {
+    const benchmarkEl = document.getElementById("community-benchmark");
+    if (benchmarkEl) {
+      benchmarkEl.innerHTML = '<div style="color:var(--muted)">Unable to load community benchmark right now.</div>';
+    }
+  }
 }
 
 function renderEnergyChart(labels, data) {

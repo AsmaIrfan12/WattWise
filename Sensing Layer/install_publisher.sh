@@ -37,9 +37,9 @@ sudo chmod +x "$INSTALL_DIR/rpi_mqtt_publisher.py"
 if [ ! -f "$CONFIG_DIR/publisher.yaml" ]; then
     echo "📋 Copying example config to $CONFIG_DIR/publisher.yaml"
     sudo cp rpi_publisher_config.yaml "$CONFIG_DIR/publisher.yaml"
-    echo "⚠️  IMPORTANT: Edit $CONFIG_DIR/publisher.yaml with your home_id, device entity IDs, and MQTT credentials!"
+    echo "⚠️   IMPORTANT: Edit $CONFIG_DIR/publisher.yaml with your home_id, device entity IDs, and MQTT credentials!"
 else
-    echo "ℹ️  Config already exists at $CONFIG_DIR/publisher.yaml — skipping copy"
+    echo "ℹ️   Config already exists at $CONFIG_DIR/publisher.yaml — skipping copy"
 fi
 
 # ── Create log file ──

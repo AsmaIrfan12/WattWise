@@ -125,6 +125,11 @@ export class AdminApiClient {
     return this.request(`/admin/analytics/energy?days=${days}`);
   }
 
+  /** @returns {Promise<{has_data:boolean, date:string|null, registered_homes:number, homes_with_data:number, total_kwh:number, total_cost_gbp:number, avg_home_kwh:number, avg_home_cost_gbp:number, min_home_kwh:number, max_home_kwh:number, peer_homes_compared:number}>} */
+  getCommunityBenchmark() {
+    return this.request("/admin/analytics/community-benchmark");
+  }
+
   /** @returns {Promise<{total_decisions: number, total_energy_saved_kwh: number, total_cost_saved_gbp: number, avg_effectiveness_score: number, accepted?: number, rejected?: number, avg_response_time_seconds?: number}>} */
   getDecisionAnalytics() {
     return this.request("/admin/analytics/decisions");

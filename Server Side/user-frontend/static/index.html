@@ -141,6 +141,10 @@ section{display:none}section.active{display:block}
       <div class="card-hdr"><span class="card-title">Recent Alerts</span><button class="btn btn-outline btn-sm" onclick="goSection('notifications')">See all</button></div>
       <div id="home-alerts"><div class="loading">Loading…</div></div>
     </div>
+    <div class="card">
+      <div class="card-hdr"><span class="card-title">Community Benchmark</span><button class="btn btn-outline btn-sm" onclick="goSection('ranking')">Open ranking</button></div>
+      <div id="home-benchmark"><div class="loading">Loading…</div></div>
+    </div>
   </section>
 
   <!-- ── Devices ────────────────────────── -->
@@ -390,6 +394,7 @@ async function loadHome(){
 
   loadAlertPreview();
   loadHRank();
+  loadCommunityBenchmarkPreview();
 }
 
 async function loadAlertPreview(){
@@ -409,6 +414,48 @@ async function loadHRank(){
       document.getElementById('h-rank').textContent='#'+r.rank_position;
       document.getElementById('h-percentile').textContent='Top '+(100-r.percentile).toFixed(0)+'%';
     }
+  }catch(e){}
+}
+
+async function loadCommunityBenchmarkPreview(){
+  try{
+    const benchmark=await apiFetch('/rankings/community-benchmark');
+    const el=document.getElementById('home-benchmark');
+    if(!benchmark.has_data){
+      el.innerHTML='<div class="loading">No community comparison yet. Once daily totals are available, your benchmark will appear here.</div>';
+      return;
+    }
+
+    const statusMap={
+      below_average:{label:'Below community average',color:'var(--green)'},
+      above_average:{label:'Above community average',color:'var(--amber)'},
+      at_average:{label:'In line with community average',color:'var(--blue)'}
+    };
+    const status=statusMap[benchmark.comparison.status]||statusMap.at_average;
+    const deltaLabel=benchmark.comparison.delta_kwh<0?'less':'more';
+    const absDelta=Math.abs(benchmark.comparison.delta_kwh).toFixed(2);
+
+    el.innerHTML=`
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;align-items:start">
+        <div>
+          <div class="sc-label">Your Avg / Home</div>
+          <div style="font-size:1.35rem;font-weight:700">${benchmark.user.avg_home_kwh.toFixed(2)} kWh</div>
+          <div class="sc-sub">${benchmark.user.homes_with_data} home(s) with data on ${sanitize(benchmark.date)}</div>
+        </div>
+        <div>
+          <div class="sc-label">Community Avg</div>
+          <div style="font-size:1.35rem;font-weight:700">${benchmark.community.avg_home_kwh.toFixed(2)} kWh</div>
+          <div class="sc-sub">Across ${benchmark.community.peer_homes_compared} peer home(s)</div>
+        </div>
+        <div>
+          <div class="sc-label">Snapshot</div>
+          <div style="font-size:1rem;font-weight:700;color:${status.color}">${status.label}</div>
+          <div class="sc-sub">${absDelta} kWh ${deltaLabel} than the peer average</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:.82rem;color:var(--mu)">
+        You used less energy than <strong style="color:var(--t)">${benchmark.comparison.better_than_percent.toFixed(0)}%</strong> of comparable homes in the latest daily dataset.
+      </div>`;
   }catch(e){}
 }
 

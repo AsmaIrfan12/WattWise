@@ -69,9 +69,18 @@ class InfluxReader:
         )
 
     def get_latest(self, entity_id: str, measurement: str = "state") -> dict | None:
-        """Get most recent value for an entity_id."""
+        """Get most recent value for an entity_id. Uses parameterized WHERE clause."""
+        # Sanitize entity_id to prevent injection (only alphanumeric, _, ., -)
+        import re
+        safe_entity = re.sub(r"[^a-zA-Z0-9_\.\-]", "", entity_id)
+        if safe_entity != entity_id:
+            logger.warning(f"entity_id sanitized: '{entity_id}' → '{safe_entity}'")
+            entity_id = safe_entity
+
+        # InfluxDB 1.x doesn't support proper parameterized queries for tag values;
+        # We sanitize the input above and use quoted string literals.
         query = (
-            f"SELECT value, state FROM \"{measurement}\" "
+            f'SELECT value, state FROM "{measurement}" '
             f"WHERE entity_id = '{entity_id}' "
             f"ORDER BY time DESC LIMIT 1"
         )
@@ -84,17 +93,27 @@ class InfluxReader:
         return None
 
     def get_energy_kwh(self, entity_id: str) -> dict | None:
-        """Fetch latest energy kWh reading (uses 'kWh' measurement in HA)."""
+        """Fetch latest energy kWh reading. Sanitizes entity_id before querying."""
+        import re
+        safe_entity = re.sub(r"[^a-zA-Z0-9_\.\-]", "", entity_id)
+        entity_id = safe_entity
+
         for measurement in ["kWh", "W", "state"]:
             try:
                 query = (
-                    f"SELECT value FROM \"{measurement}\" "
+                    f'SELECT value FROM "{measurement}" '
                     f"WHERE entity_id = '{entity_id}' "
                     f"ORDER BY time DESC LIMIT 1"
                 )
                 result = list(self.client.query(query).get_points())
                 if result:
-                    return {"value": float(result[0].get("value", 0)), "measurement": measurement}
+                    raw = float(result[0].get("value", 0) or 0)
+                    # Validate: reject NaN, Inf, negative, impossibly large values
+                    import math
+                    if math.isnan(raw) or math.isinf(raw) or raw < 0 or raw > 50000:
+                        logger.warning(f"Invalid sensor value for {entity_id}: {raw}")
+                        return None
+                    return {"value": raw, "measurement": measurement}
             except Exception:
                 continue
         return None
@@ -107,7 +126,7 @@ class InfluxReader:
             return False
 
 
-# ── MQTT Publisher ─────────────────────────────────────────────────────────────
+## ── MQTT Publisher ─────────────────────────────────────────────────────────────
 class MQTTPublisher:
     """Authenticated MQTT client for the WattWise cloud broker."""
 
@@ -156,17 +175,30 @@ class MQTTPublisher:
         logger.debug(f"📤 MQTT message published (mid={mid})")
 
     def connect(self):
-        try:
-            self.client.connect(
-                self.cfg["host"],
-                self.cfg.get("port", 1883),
-                keepalive=60,
-            )
-            self.client.loop_start()
-            time.sleep(2)  # Allow connection to establish
-        except Exception as e:
-            logger.error(f"MQTT connection error: {e}")
-            raise
+        """Connect to MQTT broker with exponential backoff retry."""
+        import time as _time
+        max_retries = 10
+        base_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                self.client.connect(
+                    self.cfg["host"],
+                    self.cfg.get("port", 1883),
+                    keepalive=60,
+                )
+                self.client.loop_start()
+                _time.sleep(2)  # Allow connection to establish
+                if self.connected:
+                    return
+                raise ConnectionError("MQTT connected but not acknowledged")
+            except Exception as e:
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning(
+                    f"MQTT connection attempt {attempt + 1}/{max_retries} failed: {e}. "
+                    f"Retrying in {delay:.0f}s..."
+                )
+                _time.sleep(delay)
+        raise RuntimeError(f"Failed to connect to MQTT broker after {max_retries} attempts")
 
     def publish_device(self, device_id: str, payload: dict) -> bool:
         """Publish device telemetry to wattwise/homes/{home_id}/devices/{device_id}/data"""

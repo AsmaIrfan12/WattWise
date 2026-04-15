@@ -1,7 +1,9 @@
 """WattWise — Application Configuration."""
 
 import logging as _logging
+import secrets
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -11,9 +13,6 @@ class Settings(BaseSettings):
 
     # MySQL (Relational data)
     DATABASE_URL: str = "mysql+aiomysql://wattwise_app:changeme_app_2026@mysql:3306/wattwise_db"
-
-    # MongoDB (User auth — existing Node.js API compatibility)
-    MONGODB_URI: str = "mongodb://wattwise_admin:changeme_mongo_2026@mongodb:27017/wattwise?authSource=admin"
 
     # InfluxDB (Time-series energy telemetry)
     INFLUX_HOST: str = "influxdb"
@@ -27,6 +26,8 @@ class Settings(BaseSettings):
     MQTT_BROKER_HOST: str = "mosquitto"
     MQTT_BROKER_PORT: int = 1883
     MQTT_TOPIC_PREFIX: str = "wattwise/homes"
+    MQTT_USERNAME: str = "wattwise_backend"
+    MQTT_PASSWORD: str = "changeme_mqtt_2026"
 
     # Auth
     SECRET_KEY: str = "changeme-secret-key-wattwise-2026"
@@ -61,6 +62,13 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:5000"
 
+    # Email (SMTP) — optional, leave SMTP_USER empty to disable
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "WattWise <noreply@wattwiser.org>"
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
@@ -87,7 +95,7 @@ def _warn_changeme(settings: "Settings") -> None:
         "SECRET_KEY": settings.SECRET_KEY,
         "DATABASE_URL": settings.DATABASE_URL,
         "INFLUX_PASS": settings.INFLUX_PASS,
-        "MQTT_PASSWORD": getattr(settings, "MQTT_PASSWORD", ""),
+        "MQTT_PASSWORD": settings.MQTT_PASSWORD,
         "ADMIN_PASSWORD": getattr(settings, "ADMIN_PASSWORD", ""),
     }
     for name, val in fields.items():

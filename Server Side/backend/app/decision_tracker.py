@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -186,9 +186,9 @@ class DecisionTracker:
         result = await db.execute(
             select(
                 func.count(UserDecision.id).label("total"),
-                func.sum(func.IF(UserDecision.decision_type == "ACCEPTED", 1, 0)).label("accepted"),
-                func.sum(func.IF(UserDecision.decision_type == "REJECTED", 1, 0)).label("rejected"),
-                func.sum(func.IF(UserDecision.decision_type == "DEFERRED", 1, 0)).label("deferred"),
+                func.sum(case((UserDecision.decision_type == "ACCEPTED", 1), else_=0)).label("accepted"),
+                func.sum(case((UserDecision.decision_type == "REJECTED", 1), else_=0)).label("rejected"),
+                func.sum(case((UserDecision.decision_type == "DEFERRED", 1), else_=0)).label("deferred"),
                 func.avg(UserDecision.response_time_seconds).label("avg_response"),
                 func.sum(UserDecision.energy_saved_kwh).label("total_saved_kwh"),
                 func.sum(UserDecision.cost_saved_gbp).label("total_saved_gbp"),
