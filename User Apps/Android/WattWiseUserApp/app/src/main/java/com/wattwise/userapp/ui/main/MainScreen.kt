@@ -44,6 +44,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -68,7 +69,8 @@ import timber.log.Timber
 @Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    onLogout: () -> Unit = {}
 ) {
     val fullUrl by viewModel.fullUrl.collectAsState()
     val webUrl by viewModel.webUrl.collectAsState()
@@ -76,6 +78,16 @@ fun MainScreen(
     val isPageLoaded by viewModel.isPageLoaded.collectAsState()
     val isError by viewModel.isError.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val lastWebViewUrl by viewModel.lastWebViewUrl.collectAsState()
+    val logoutEvent by viewModel.logoutEvent.collectAsState()
+
+    // Navigate to Login on logout event
+    LaunchedEffect(logoutEvent) {
+        if (logoutEvent) {
+            viewModel.logoutEventConsumed()
+            onLogout()
+        }
+    }
 
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var progress by remember { mutableIntStateOf(0) }
@@ -154,6 +166,8 @@ fun MainScreen(
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         progress = 0
+                                        // Track last URL in ViewModel — survives rotation
+                                        url?.let { viewModel.onWebViewUrlChanged(it) }
                                     }
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
@@ -199,14 +213,14 @@ fun MainScreen(
                                         origin: String?,
                                         callback: GeolocationPermissions.Callback?
                                     ) {
-                                        // Auto-grant if already allowed, else the browser/OS will handle based on manifest
-                                        // For a seamless experience, we grant here because permissions are declared in Manifest
                                         callback?.invoke(origin, true, false)
                                     }
                                 }
 
                                 webViewRef = this
-                                loadUrl(webUrl)
+                                // On rotation: restore last URL instead of re-sending token fragment
+                                val urlToLoad = lastWebViewUrl ?: webUrl
+                                loadUrl(urlToLoad)
                             }
                         },
                         modifier = Modifier.fillMaxSize()

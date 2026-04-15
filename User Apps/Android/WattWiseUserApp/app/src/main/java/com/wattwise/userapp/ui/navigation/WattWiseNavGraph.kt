@@ -5,6 +5,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.wattwise.userapp.ui.about.AboutScreen
+import com.wattwise.userapp.ui.auth.ForgotPasswordScreen
 import com.wattwise.userapp.ui.auth.LoginScreen
 import com.wattwise.userapp.ui.auth.SignupScreen
 import com.wattwise.userapp.ui.main.MainScreen
@@ -19,18 +20,20 @@ import com.wattwise.userapp.ui.splash.SplashScreen
  *          ──(no token) ──► Login
  *
  * Auth flow:
- *   Login ──(success)──► Main
- *         ──(new user)──► Signup ──(success)──► Main
+ *   Login ──(success)──────► Main
+ *         ──(new user)───► Signup ──(success)──► Main
+ *         ──(forgot pw)──► ForgotPassword ──► Login
  *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
 object Routes {
-    const val SPLASH   = "splash"
-    const val LOGIN    = "login"
-    const val SIGNUP   = "signup"
-    const val MAIN     = "main"
-    const val SETTINGS = "settings"
-    const val ABOUT    = "about"
+    const val SPLASH           = "splash"
+    const val LOGIN            = "login"
+    const val SIGNUP           = "signup"
+    const val FORGOT_PASSWORD  = "forgot_password"
+    const val MAIN             = "main"
+    const val SETTINGS         = "settings"
+    const val ABOUT            = "about"
 }
 
 @Composable
@@ -43,7 +46,7 @@ fun WattWiseNavGraph(
         startDestination = Routes.SPLASH
     ) {
 
-        // ── Splash ─────────────────────────────────────────
+        // ── Splash ─────────────────────────────────────────────────
         composable(Routes.SPLASH) {
             SplashScreen(
                 onSplashFinished = {
@@ -55,7 +58,7 @@ fun WattWiseNavGraph(
             )
         }
 
-        // ── Login ───────────────────────────────────────────
+        // ── Login ───────────────────────────────────────────────────
         composable(Routes.LOGIN) {
             LoginScreen(
                 onLoginSuccess = {
@@ -65,11 +68,14 @@ fun WattWiseNavGraph(
                 },
                 onNavigateToSignup = {
                     navController.navigate(Routes.SIGNUP)
+                },
+                onNavigateToForgotPassword = {
+                    navController.navigate(Routes.FORGOT_PASSWORD)
                 }
             )
         }
 
-        // ── Signup ──────────────────────────────────────────
+        // ── Signup ──────────────────────────────────────────────────
         composable(Routes.SIGNUP) {
             SignupScreen(
                 onSignupSuccess = {
@@ -83,17 +89,31 @@ fun WattWiseNavGraph(
             )
         }
 
-        // ── Main WebView Dashboard ──────────────────────────
-        composable(Routes.MAIN) {
-            MainScreen(
-                onNavigateToSettings = {
-                    navController.navigate(Routes.SETTINGS)
+        // ── Forgot Password ─────────────────────────────────────────
+        composable(Routes.FORGOT_PASSWORD) {
+            ForgotPasswordScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
                 }
             )
         }
 
-        // ── Settings ────────────────────────────────────────
-        // SettingsScreen only accepts onNavigateBack (About info is inline in Settings)
+        // ── Main WebView Dashboard ───────────────────────────────────
+        composable(Routes.MAIN) {
+            MainScreen(
+                onNavigateToSettings = {
+                    navController.navigate(Routes.SETTINGS)
+                },
+                onLogout = {
+                    // Full logout: clear back stack back to login
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // ── Settings ────────────────────────────────────────────────
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
@@ -105,7 +125,7 @@ fun WattWiseNavGraph(
             )
         }
 
-        // ── About ───────────────────────────────────────────
+        // ── About ───────────────────────────────────────────────────
         composable(Routes.ABOUT) {
             AboutScreen(
                 onNavigateBack = { navController.popBackStack() }
@@ -113,4 +133,3 @@ fun WattWiseNavGraph(
         }
     }
 }
-

@@ -11,8 +11,8 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Shared ViewModel for Login and Signup screens.
- * Calls the WattWise FastAPI backend via [AuthRepository].
+ * Shared ViewModel for Login, Signup, and ForgotPassword screens.
+ * Delegates all backend calls to [AuthRepository].
  *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
@@ -21,13 +21,16 @@ class AuthViewModel @Inject constructor(
     private val authRepository: AuthRepository
 ) : ViewModel() {
 
-    private val _loginState  = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
+    private val _loginState         = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
     val loginState: StateFlow<AuthUiState> = _loginState.asStateFlow()
 
-    private val _signupState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
+    private val _signupState        = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
     val signupState: StateFlow<AuthUiState> = _signupState.asStateFlow()
 
-    // ── Login ──────────────────────────────────────────────────────────
+    private val _resetPasswordState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
+    val resetPasswordState: StateFlow<AuthUiState> = _resetPasswordState.asStateFlow()
+
+    // ── Login ───────────────────────────────────────────────────────────────
     fun login(email: String, password: String) {
         if (_loginState.value is AuthUiState.Loading) return
         viewModelScope.launch {
@@ -41,7 +44,7 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    // ── Signup ─────────────────────────────────────────────────────────
+    // ── Signup ──────────────────────────────────────────────────────────────
     fun signup(name: String, email: String, password: String) {
         if (_signupState.value is AuthUiState.Loading) return
         viewModelScope.launch {
@@ -55,18 +58,33 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    // ── Reset state ────────────────────────────────────────────────────
-    fun resetLoginState()  { _loginState.value  = AuthUiState.Idle }
-    fun resetSignupState() { _signupState.value = AuthUiState.Idle }
+    // ── Forgot Password ──────────────────────────────────────────────────────
+    fun requestPasswordReset(email: String) {
+        if (_resetPasswordState.value is AuthUiState.Loading) return
+        viewModelScope.launch {
+            _resetPasswordState.value = AuthUiState.Loading
+            val result = authRepository.requestPasswordReset(email.trim())
+            _resetPasswordState.value = if (result.isSuccess) {
+                AuthUiState.Success(result.getOrDefault("Reset email sent."))
+            } else {
+                AuthUiState.Error(result.exceptionOrNull()?.message ?: "Password reset failed")
+            }
+        }
+    }
 
-    // ── Manual error (e.g. client-side validation) ─────────────────────
+    // ── State resets ─────────────────────────────────────────────────────────
+    fun resetLoginState()         { _loginState.value         = AuthUiState.Idle }
+    fun resetSignupState()        { _signupState.value        = AuthUiState.Idle }
+    fun resetPasswordResetState() { _resetPasswordState.value = AuthUiState.Idle }
+
+    // ── Manual client-side error (validation) ─────────────────────────────────
     fun setError(message: String) { _loginState.value = AuthUiState.Error(message) }
 }
 
-/** Sealed hierarchy for UI state across login/signup flows. */
+/** Sealed hierarchy for UI state across auth flows. */
 sealed class AuthUiState {
     data object Idle    : AuthUiState()
     data object Loading : AuthUiState()
-    data class  Success(val token: String) : AuthUiState()
-    data class  Error(val message: String) : AuthUiState()
+    data class  Success(val message: String = "") : AuthUiState()
+    data class  Error(val message: String)        : AuthUiState()
 }

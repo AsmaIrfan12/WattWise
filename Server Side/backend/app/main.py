@@ -25,6 +25,7 @@ from app.scheduler import (
 from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
+from app.routers import advanced
 
 
 def _configure_logging():
@@ -210,7 +211,7 @@ app.add_middleware(
 # ── JWT Auth Middleware ───────────────────────────────────────
 PUBLIC_PATHS = {
     "/", "/health", "/health/dependencies", "/health/slo", "/metrics", "/docs", "/openapi.json", "/redoc",
-    "/api/auth/signup", "/api/auth/login",
+    "/api/auth/signup", "/api/auth/login", "/api/auth/forgot-password",
     "/api/rankings/leaderboard",
 }
 
@@ -312,6 +313,7 @@ app.include_router(analysis.router)
 app.include_router(admin.router)
 app.include_router(export.router)
 app.include_router(backup.router)
+app.include_router(advanced.router)
 
 
 # ── Health ────────────────────────────────────────────────────

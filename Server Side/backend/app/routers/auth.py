@@ -205,3 +205,42 @@ async def logout(request: Request):
         token = auth_header[7:]
         _token_denylist.add(token)
     return {"success": True, "message": "Logged out"}
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Trigger a password reset email for the given address.
+
+    Security note: Always returns HTTP 200 regardless of whether the email exists
+    to prevent user enumeration attacks.
+
+    In production, replace the stub below with an SMTP/SendGrid call to send the
+    actual reset link. The reset token should be a signed JWT with short expiry
+    stored in the `password_reset_token` column (add via migration if needed).
+    """
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=422, detail="Email is required.")
+
+    # Lookup user (we don't leak whether they exist)
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        # TODO: Generate a signed reset token and send via SMTP
+        # reset_token = _create_token(user.id, is_admin=False)
+        # await send_password_reset_email(email, reset_token)
+        import logging
+        logging.getLogger("auth").info(
+            "Password reset requested for user_id=%s email=%s", user.id, email
+        )
+
+    # Always return 200 — prevents user enumeration
+    return {
+        "success": True,
+        "message": f"If an account exists for {email}, a reset link has been sent.",
+    }

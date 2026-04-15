@@ -53,7 +53,8 @@ import com.wattwise.userapp.util.Constants
 fun LoginScreen(
     viewModel: AuthViewModel = hiltViewModel(),
     onLoginSuccess: () -> Unit,
-    onNavigateToSignup: () -> Unit
+    onNavigateToSignup: () -> Unit,
+    onNavigateToForgotPassword: () -> Unit = {}
 ) {
     val uiState by viewModel.loginState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -219,6 +220,21 @@ fun LoginScreen(
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
+
+                        // ── Forgot password link ──
+                        TextButton(
+                            onClick = {
+                                viewModel.resetLoginState()
+                                onNavigateToForgotPassword()
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text(
+                                text = "Forgot password?",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 13.sp
+                            )
+                        }
 
                         // ── Login button ──
                         Button(

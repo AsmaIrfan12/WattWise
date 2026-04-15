@@ -50,4 +50,14 @@ interface WattWiseAuthApi {
     suspend fun logout(
         @Header("Authorization") bearerToken: String
     ): Response<Void>
+
+    /**
+     * POST /api/auth/forgot-password
+     * Body: { "email": "..." }
+     * Triggers a password reset email from the server.
+     */
+    @POST("/api/auth/forgot-password")
+    suspend fun requestPasswordReset(
+        @Body body: Map<String, String>
+    ): Response<Map<String, Any>>
 }

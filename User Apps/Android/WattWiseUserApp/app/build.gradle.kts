@@ -66,6 +66,8 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.datastore.preferences)
     implementation(libs.splashscreen)
+    implementation(libs.security.crypto)
+    implementation(libs.biometric)
 
     // ── Material (XML theme support) ──
     implementation(libs.material)
