@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY ["dummy_data_sender.py", "./"]
+COPY ["Server Side/backend/participants.csv", "participants.csv"]
+
+RUN pip install --no-cache-dir requests
+
+CMD ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--interval", "30", "--no-backfill", "--csv", "participants.csv"]

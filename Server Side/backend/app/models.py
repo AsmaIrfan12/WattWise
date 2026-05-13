@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for WattWise Energy Monitoring Platform."""
 
-from datetime import datetime, date
+from datetime import datetime
 from sqlalchemy import (
     Column, Integer, BigInteger, SmallInteger,
     String, Float, Boolean, DateTime, Date, Enum, Text, JSON,
@@ -401,7 +401,8 @@ class AdminAuditLog(Base):
         Enum(
             "SEND_NOTIFICATION", "ASSIGN_PERSONA", "TOGGLE_NOTIFICATIONS",
             "RESET_PASSWORD", "BULK_OPERATION", "EDIT_USER",
-            "RUN_CLASSIFIER", "EXPORT_DATA", "BACKUP_TRIGGERED", "LOGIN",
+            "RUN_CLASSIFIER", "EXPORT_DATA", "BACKUP_TRIGGERED",
+            "TRIGGER_SMART_NOTIFICATIONS", "LOGIN",
         ),
         nullable=False,
     )

@@ -46,6 +46,19 @@
   --transition:     0.2s ease;
 }
 
+/* ── Light Mode Overrides ────────────────────────────────────── */
+body.light-mode {
+  --bg-page:        #f8fafc;
+  --bg-surface:     #ffffff;
+  --bg-surface-2:   #f1f5f9;
+  --bg-surface-3:   #e2e8f0;
+  --border:         #e2e8f0;
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #64748b;
+  --brand-glow:     rgba(59,130,246,0.15);
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
@@ -870,3 +883,8 @@ html, body {
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .impact-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+.checkbox-list.scrollable { overflow-y: auto; max-height: 150px; padding: 8px; background: var(--bg-surface-2); }
+.checkbox-label { display: block; padding: 4px 8px; cursor: pointer; border-radius: 4px; font-size: 13px; color: var(--text-primary); }
+.checkbox-label:hover { background: var(--bg-surface-3); }
+.checkbox-label input { margin-right: 8px; cursor: pointer; }

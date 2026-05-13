@@ -9,16 +9,13 @@ import logging
 from datetime import datetime, timedelta, date
 
 from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models import (
     Device, EnergyReading, HourlySummary, DailySummary,
     HomeDailyTotal, Home, User, EnergyGoal, EnergyRanking,
-    UserDecision,
 )
 from app.energy_analysis import EnergyAnalysisEngine
-from app.config import settings
 
 logger = logging.getLogger("scheduler")
 
@@ -370,3 +367,67 @@ async def compute_rankings():
 
         await db.commit()
     logger.info(f"Rankings computed for {total_users} homes")
+
+
+# ── Automated Analytics Thresholds ──────────────────────────────
+
+async def evaluate_analytics_thresholds():
+    """
+    Called daily after aggregation. Evaluates comparison metrics and triggers
+    automated alerts (HIGH_CONSUMPTION, STANDBY_ALERT, RECOMMENDATION).
+    """
+    logger.info("Evaluating analytics thresholds for automated alerts...")
+    from app.notification_engine import NotificationEngine
+    yesterday = date.today() - timedelta(days=1)
+
+    async with AsyncSessionLocal() as db:
+        # 1. High Consumption Alert (Users)
+        # Compare users' daily total against the 95th percentile.
+        totals_result = await db.execute(
+            select(HomeDailyTotal.home_id, HomeDailyTotal.total_kwh, Home.user_id)
+            .join(Home, HomeDailyTotal.home_id == Home.id)
+            .where(HomeDailyTotal.day_date == yesterday)
+        )
+        totals = totals_result.all()
+        
+        if totals and len(totals) > 5:
+            kwh_values = sorted([float(row.total_kwh or 0) for row in totals])
+            p95_index = int(len(kwh_values) * 0.95)
+            p95_threshold = max(kwh_values[p95_index], 5.0) # ignore if overall usage is low
+            
+            for row in totals:
+                if row.total_kwh > p95_threshold:
+                    await NotificationEngine.create_notification(
+                        db=db,
+                        user_id=row.user_id,
+                        home_id=row.home_id,
+                        title="High Energy Consumption Detected",
+                        message=f"Your energy usage yesterday ({row.total_kwh:.1f} kWh) was significantly above the community average. Consider turning off unused appliances.",
+                        notification_type="HIGH_CONSUMPTION",
+                        severity="WARNING",
+                        action_button_text="Review Analytics"
+                    )
+
+        # 2. Standby / Offline Anomaly (Devices)
+        # Look for devices with 0 active minutes but >0 energy consumed (vampire drain).
+        dev_result = await db.execute(
+            select(DailySummary.device_id, DailySummary.total_kwh, Device.name, Home.user_id)
+            .join(Device, DailySummary.device_id == Device.id)
+            .join(Home, Device.home_id == Home.id)
+            .where(DailySummary.day_date == yesterday, DailySummary.active_minutes == 0, DailySummary.total_kwh > 0.1)
+        )
+        standby_devices = dev_result.all()
+
+        for row in standby_devices:
+            await NotificationEngine.create_notification(
+                db=db,
+                user_id=row.user_id,
+                device_id=row.device_id,
+                title="Vampire Drain Detected",
+                message=f"Your {row.name} was not actively used yesterday but consumed {row.total_kwh:.2f} kWh in standby. Consider unplugging it.",
+                notification_type="STANDBY_ALERT",
+                severity="INFO",
+                action_button_text="Turn Off Device"
+            )
+            
+    logger.info("Analytics thresholds evaluation complete")

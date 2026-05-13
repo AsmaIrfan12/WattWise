@@ -12,13 +12,13 @@ Core analytical service for:
 """
 
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 from typing import Optional
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import EnergyReading, HourlySummary, DailySummary, HomeDailyTotal, EnergyGoal
+from app.models import EnergyReading
 
 logger = logging.getLogger("energy_analysis")
 

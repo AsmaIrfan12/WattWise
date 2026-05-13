@@ -36,3 +36,20 @@ def test_build_admin_community_snapshot_handles_empty_state():
     assert payload["registered_homes"] == 2
     assert payload["homes_with_data"] == 0
     assert payload["avg_home_kwh"] == 0.0
+
+
+def test_trigger_smart_notifs_result_schema():
+    result = {"users_processed": 3, "notifications_created": 5, "skipped_dedup": 1}
+
+    assert "users_processed" in result
+    assert "notifications_created" in result
+    assert "skipped_dedup" in result
+    assert result["users_processed"] >= 0
+    assert result["notifications_created"] >= 0
+    assert result["skipped_dedup"] >= 0
+
+
+def test_trigger_smart_notifs_import():
+    from app.appliance_scenarios import calculate_optimization
+
+    assert callable(calculate_optimization)

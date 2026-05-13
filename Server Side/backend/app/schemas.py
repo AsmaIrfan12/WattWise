@@ -290,3 +290,94 @@ class AdminDashboardResponse(BaseModel):
 
 class PushTokenUpdate(BaseModel):
     push_token: str
+
+
+# ── Environment (Room Sensors) ─────────────────────────────────
+
+class EnvironmentalReading(BaseModel):
+    current: Optional[float]
+    unit: str
+    data_count: int
+
+class RoomEnvironmentResponse(BaseModel):
+    room_name: str
+    entity_id: Optional[str]
+    home_id: Optional[int]
+    home_name: Optional[str]
+    temperature: EnvironmentalReading
+    humidity: EnvironmentalReading
+    pressure: EnvironmentalReading
+
+class RoomSummary(BaseModel):
+    home_id: int
+    home_name: str
+    room_name: str
+    entity_id: Optional[str]
+    temperature_c: Optional[float]
+    humidity_pct: Optional[float]
+    pressure_hpa: Optional[float]
+    last_reading_time: Optional[str]
+    has_data: bool
+
+
+# ── Appliance Scenarios / Smart Notifications ─────────────────
+
+class ApplianceAlert(BaseModel):
+    level: str                   # e.g. "🟥", "🟧"
+    priority: str                # critical, warning, caution, notice
+    scenario: str                # human-readable name
+    message: str                 # full human-readable alert message
+
+class OptimizationConditions(BaseModel):
+    temperature: float
+    humidity: float
+    pressure: float
+
+class OptimizationFactors(BaseModel):
+    fT: float
+    fH: float
+    fP: float
+
+class OptimizationResult(BaseModel):
+    appliance_key: str
+    conditions: OptimizationConditions
+    factors: OptimizationFactors
+    base_energy_kwh: float
+    adjusted_energy_kwh: float
+    efficiency_loss_pct: float
+    efficiency_score: float
+    alerts: List[ApplianceAlert]
+    recommendations: List[str]
+    potential_savings_pct: float
+
+class SmartAlertResponse(BaseModel):
+    device_id: int
+    device_name: str
+    appliance_key: str
+    home_id: int
+    home_name: str
+    location: Optional[str]
+    efficiency_score: float
+    potential_savings_pct: float
+    level: str
+    priority: str
+    scenario: str
+    message: str
+
+class SmartNotificationsResponse(BaseModel):
+    message: str
+    alert_count: int
+    alerts: List[SmartAlertResponse]
+
+class DeviceCheckAdvisory(BaseModel):
+    device_name: str
+    appliance_key: str
+    location: Optional[str]
+    home_name: Optional[str]
+    is_peak_time: bool
+    current_tariff_pence_per_kwh: float
+    estimated_cost_this_use_gbp: float
+    efficiency_score: float
+    alerts: List[ApplianceAlert]
+    recommendations: List[str]
+    verdict: str

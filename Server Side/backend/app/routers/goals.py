@@ -1,14 +1,12 @@
 """WattWise — Energy Goals Router."""
 
-from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import EnergyGoal, DailySummary, HomeDailyTotal, Home, User, UserInteractionLog
+from app.models import EnergyGoal, DailySummary, HomeDailyTotal, Home, UserInteractionLog
 from app.schemas import GoalCreate, GoalResponse, GoalProgressResponse
 from app.energy_analysis import EnergyAnalysisEngine
 
@@ -105,7 +103,6 @@ async def get_goal_progress(goal_id: int, request: Request, db: AsyncSession = D
         end_date=goal.end_date,
         today=today,
     )
-    import math
     days_remaining = progress.get("days_remaining")
 
     return GoalProgressResponse(

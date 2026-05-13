@@ -14,7 +14,8 @@ Fixes applied:
 import json
 import logging
 import math
-from datetime import datetime, timezone
+import re
+from datetime import datetime
 
 import paho.mqtt.client as mqtt
 from sqlalchemy import select
@@ -58,6 +59,11 @@ def _get_influx_client():
 
 MAX_POWER_WATTS = 50_000.0   # 50 kW — no domestic appliance should exceed this
 MAX_ENERGY_KWH  = 100.0      # 100 kWh per reading — physically implausible otherwise
+
+
+def _sanitize_entity_id(entity_id: str) -> str:
+    """Allow only safe entity-id characters and normalize to lowercase."""
+    return re.sub(r"[^a-zA-Z0-9_\.\-]", "", str(entity_id or "")).lower()
 
 
 def _validate_payload(payload: dict) -> tuple[float, float | None, float | None, float | None]:
@@ -126,7 +132,7 @@ def on_message(client, userdata, msg):
         parts = msg.topic.split("/")
         topic_device_entity = parts[4] if len(parts) >= 5 else None
 
-        entity_id = payload.get("entity_id") or topic_device_entity
+        entity_id = _sanitize_entity_id(payload.get("entity_id") or topic_device_entity)
         if not entity_id:
             logger.warning("MQTT message has no entity_id on topic %s", msg.topic)
             return
@@ -263,7 +269,9 @@ async def _write_reading_to_db(
 
 def start_mqtt():
     global _mqtt_client
-    _mqtt_client = mqtt.Client(client_id="wattwise-backend", clean_session=True)
+    import uuid
+    client_id = f"wattwise-backend-{uuid.uuid4().hex[:8]}"
+    _mqtt_client = mqtt.Client(client_id=client_id, clean_session=True)
 
     # Authenticated broker connection
     if settings.MQTT_USERNAME and settings.MQTT_PASSWORD:

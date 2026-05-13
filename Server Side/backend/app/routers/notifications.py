@@ -32,13 +32,13 @@ async def list_notifications(
     user_id = _get_user_id(request)
     q = select(Notification).where(Notification.user_id == user_id)
     if filter == "unread":
-        q = q.where(Notification.is_read == False)
+        q = q.where(~Notification.is_read)
     elif filter == "critical":
         q = q.where(Notification.severity == "CRITICAL")
     elif filter == "dismissed":
-        q = q.where(Notification.dismissed == True)
+        q = q.where(Notification.dismissed)
     elif filter == "action_required":
-        q = q.where(Notification.requires_user_action == True, Notification.dismissed == False)
+        q = q.where(Notification.requires_user_action, ~Notification.dismissed)
     q = q.order_by(Notification.created_at.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(q)
     return result.scalars().all()
@@ -57,11 +57,11 @@ async def get_stats(request: Request, db: AsyncSession = Depends(get_db)):
         return r.scalar() or 0
 
     total = await count()
-    unread = await count(Notification.is_read == False)
+    unread = await count(~Notification.is_read)
     critical = await count(Notification.severity == "CRITICAL")
     today_count = await count(Notification.created_at >= today)
     requires_action = await count(
-        (Notification.requires_user_action == True) & (Notification.dismissed == False)
+        Notification.requires_user_action & ~Notification.dismissed
     )
 
     return NotificationStatsResponse(
@@ -89,13 +89,21 @@ async def mark_read(notification_id: int, request: Request, db: AsyncSession = D
     return notif
 
 
+@router.post("/{notification_id}/read", response_model=NotificationResponse)
+async def mark_read_post(
+    notification_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """POST alias for PATCH /{id}/read used by the frontend."""
+    return await mark_read(notification_id, request, db)
+
+
 @router.patch("/read-all", status_code=204)
 async def mark_all_read(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = _get_user_id(request)
     now = datetime.utcnow()
     await db.execute(
         sql_update(Notification)
-        .where(Notification.user_id == user_id, Notification.is_read == False)
+        .where(Notification.user_id == user_id, ~Notification.is_read)
         .values(is_read=True, read_at=now)
     )
     await db.commit()

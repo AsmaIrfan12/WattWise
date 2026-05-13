@@ -8,6 +8,15 @@ SET FOREIGN_KEY_CHECKS=0;
 CREATE DATABASE IF NOT EXISTS wattwise_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE wattwise_db;
 
+-- ── PERSONAS ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS personas (
+    id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name             VARCHAR(128) NOT NULL UNIQUE,
+    description      TEXT DEFAULT NULL,
+    criteria         JSON DEFAULT NULL,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
 -- ── USERS ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
     id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -17,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
     push_token       VARCHAR(512) DEFAULT NULL,
     notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     is_admin         BOOLEAN NOT NULL DEFAULT FALSE,
+    persona_id       INT UNSIGNED DEFAULT NULL,
     reset_token      VARCHAR(256) DEFAULT NULL,
     reset_token_expiry DATETIME DEFAULT NULL,
     daily_energy_goal_kwh  FLOAT DEFAULT NULL,
@@ -24,6 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
     monthly_budget_gbp     FLOAT DEFAULT NULL,
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_login_at    DATETIME DEFAULT NULL,
+    FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
     INDEX idx_users_email (email)
 ) ENGINE=InnoDB;
 
@@ -293,6 +304,26 @@ CREATE TABLE IF NOT EXISTS energy_rankings (
     FOREIGN KEY (home_id) REFERENCES homes(id) ON DELETE CASCADE,
     UNIQUE KEY uq_ranking (user_id, period_type, period_start),
     INDEX idx_ranking_period (period_type, period_start, overall_score)
+) ENGINE=InnoDB;
+
+-- ── ADMIN AUDIT LOG ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+    id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    admin_user_id    INT UNSIGNED DEFAULT NULL,
+    action_type      ENUM(
+        'SEND_NOTIFICATION', 'ASSIGN_PERSONA', 'TOGGLE_NOTIFICATIONS',
+        'RESET_PASSWORD', 'BULK_OPERATION', 'EDIT_USER',
+        'RUN_CLASSIFIER', 'EXPORT_DATA', 'BACKUP_TRIGGERED',
+        'TRIGGER_SMART_NOTIFICATIONS', 'LOGIN'
+    ) NOT NULL,
+    target_user_id   INT UNSIGNED DEFAULT NULL,
+    details_json     JSON DEFAULT NULL,
+    ip_address       VARCHAR(64) DEFAULT NULL,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_user_id) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_audit_admin_time (admin_user_id, created_at),
+    INDEX idx_audit_action (action_type, created_at)
 ) ENGINE=InnoDB;
 
 -- ── DEFAULT ADMIN USER ────────────────────────────────────────

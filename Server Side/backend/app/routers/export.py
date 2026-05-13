@@ -3,7 +3,6 @@
 import csv
 import io
 from datetime import date, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
@@ -11,7 +10,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import UserDecision, EnergyRanking, HomeDailyTotal, Notification, User, Home
+from app.models import UserDecision, EnergyRanking, HomeDailyTotal, User, Home
 
 router = APIRouter(prefix="/api/admin/export", tags=["Admin Export"])
 

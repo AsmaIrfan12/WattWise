@@ -25,6 +25,11 @@ google-services.json
 
 # ── Docker ────────────────────────────────────────
 mosquitto/config/passwd
+Server Side/mosquitto/config/passwd
+Server Side/passwd_out
+
+# ── Local IDE/agent state ─────────────────────────
+old/
 
 # ── OS ────────────────────────────────────────────
 .DS_Store

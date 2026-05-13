@@ -6,6 +6,15 @@ so settings validation doesn't fail during test runs.
 """
 
 import os
+import sys
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 # Provide all required settings so pydantic-settings doesn't raise on import
 os.environ.setdefault("SECRET_KEY", "test_secret_key_for_unit_tests_only_x_padding_here")
@@ -25,3 +34,12 @@ os.environ.setdefault("ADMIN_PASSWORD", "test_admin_pass_long_enough")
 os.environ.setdefault("STRICT_SECURITY", "false")
 os.environ.setdefault("LOG_FORMAT", "text")
 os.environ.setdefault("ALLOWED_ORIGINS", "http://localhost")
+
+
+@pytest.fixture
+async def api_client():
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client

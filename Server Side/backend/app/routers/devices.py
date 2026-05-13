@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import User, Home, Device, Room
+from app.models import Home, Device
 from app.schemas import HomeCreate, HomeResponse, DeviceCreate, DeviceResponse
 
 router = APIRouter(prefix="/api", tags=["Homes & Devices"])

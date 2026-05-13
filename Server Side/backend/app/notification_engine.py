@@ -13,17 +13,15 @@ Push delivery: Expo Push API (compatible with React Native / Expo apps)
 """
 
 import logging
-import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import User, Notification, Device, Home, EnergyGoal, DailySummary, HomeDailyTotal
-from app.energy_analysis import EnergyAnalysisEngine
+from app.models import User, Notification, Device, Home, DailySummary, HomeDailyTotal
 
 logger = logging.getLogger("notification_engine")
 
@@ -233,7 +231,6 @@ class NotificationEngine:
         """
         Send yesterday's energy summary to all users. Called daily at 7 AM.
         """
-        from datetime import date
         yesterday = (datetime.utcnow() - timedelta(days=1)).date()
 
         users_result = await db.execute(
@@ -261,7 +258,7 @@ class NotificationEngine:
 
                     await NotificationEngine.create_notification(
                         db, user.id,
-                        title=f"📊 Yesterday's Energy Summary",
+                        title="📊 Yesterday's Energy Summary",
                         message=f"You used {kwh:.2f} kWh{goal_text} costing £{cost:.2f}. Open the app for a full breakdown.",
                         notification_type="DAILY_SUMMARY",
                         severity="INFO",
@@ -325,3 +322,149 @@ class NotificationEngine:
 
         logger.info(f"Admin broadcast '{title}' sent to {count} users")
         return count
+
+    # ── Smart Device Scenario Notifications ───────────────────
+
+    @staticmethod
+    async def check_device_scenario_notifications(db: AsyncSession):
+        """
+        Called every 2 hours by the scheduler.
+        Runs the appliance scenarios engine for all active users and their devices.
+        Fetches real room environmental conditions from InfluxDB where available.
+        Only sends CRITICAL and WARNING alerts to prevent notification fatigue.
+        Deduplication (12-hour window) is handled by create_notification().
+        """
+        from datetime import date
+        from app.models import Home, Room
+        from app.appliance_scenarios import calculate_optimization
+        from influxdb import InfluxDBClient
+
+        logger.info("Running smart device scenario notification check...")
+
+        influx = InfluxDBClient(
+            host=settings.INFLUX_HOST,
+            port=settings.INFLUX_PORT,
+            username=settings.INFLUX_USER,
+            password=settings.INFLUX_PASS,
+            database=settings.INFLUX_DB,
+        )
+
+        def _latest_sensor(measurement: str, entity_id: str) -> Optional[float]:
+            try:
+                result = influx.query(
+                    f'SELECT * FROM "{measurement}" WHERE entity_id = \'{entity_id}\' '
+                    f"ORDER BY time DESC LIMIT 1"
+                )
+                pts = list(result.get_points())
+                return float(pts[0]["value"]) if pts else None
+            except Exception:
+                return None
+
+        today = date.today()
+        users_result = await db.execute(
+            select(User).where(User.notifications_enabled == True, User.push_token.isnot(None))
+        )
+        users = users_result.scalars().all()
+
+        for user in users:
+            try:
+                homes_result = await db.execute(
+                    select(Home).where(Home.user_id == user.id, Home.is_active == True)
+                )
+                homes = homes_result.scalars().all()
+
+                for home in homes:
+                    # Build room conditions lookup
+                    rooms_result = await db.execute(
+                        select(Room).where(Room.home_id == home.id)
+                    )
+                    rooms = rooms_result.scalars().all()
+                    room_conditions: dict[str, dict] = {}
+                    for room in rooms:
+                        base = room.entity_id or room.name.lower().replace(" ", "")
+                        temp = _latest_sensor("°C", f"{base}_temperature")
+                        hum = _latest_sensor("%", f"{base}_humidity")
+                        pres = _latest_sensor("hPa", f"{base}_pressure")
+                        room_conditions[room.name.lower()] = {
+                            "temperature": temp or 20.0,
+                            "humidity": hum or 50.0,
+                            "pressure": pres or 101.3,
+                        }
+
+                    default_cond = (
+                        list(room_conditions.values())[0]
+                        if room_conditions
+                        else {"temperature": 20.0, "humidity": 50.0, "pressure": 101.3}
+                    )
+
+                    devices_result = await db.execute(
+                        select(Device).where(Device.home_id == home.id, Device.is_active == True)
+                    )
+                    devices = devices_result.scalars().all()
+
+                    for device in devices:
+                        if not device.appliance_key:
+                            continue
+
+                        daily_result = await db.execute(
+                            select(DailySummary).where(
+                                DailySummary.device_id == device.id,
+                                DailySummary.day_date == today,
+                            )
+                        )
+                        daily = daily_result.scalar_one_or_none()
+
+                        location_key = (device.location or "").lower()
+                        cond = room_conditions.get(location_key, default_cond)
+
+                        usage_data = {
+                            "N": daily.usage_cycles or 0 if daily else 0,
+                            "eaec": (daily.total_kwh / max(daily.usage_cycles, 1))
+                                    if daily and daily.usage_cycles else 0,
+                            "dailyEAEC": daily.total_kwh or 0 if daily else 0,
+                            "duration": daily.active_minutes or 0 if daily else 0,
+                            "avgPower": daily.avg_watts or 0 if daily else 0,
+                            "isPeakTime": settings.is_peak_time(),
+                            "standbyTime": 0, "standbyPower": 0,
+                            "lateNightHours": 0, "keepWarmTime": 0, "shortUseCount": 0,
+                        }
+
+                        optimization = calculate_optimization(
+                            appliance_key=device.appliance_key,
+                            temperature=cond["temperature"],
+                            humidity=cond["humidity"],
+                            pressure=cond["pressure"],
+                            usage_data=usage_data,
+                        )
+
+                        for alert in optimization["alerts"]:
+                            if alert["priority"] not in ("critical", "warning"):
+                                continue
+
+                            severity = "CRITICAL" if alert["priority"] == "critical" else "WARNING"
+                            notif_type = "ENERGY_ALERT" if severity == "CRITICAL" else "RECOMMENDATION"
+
+                            await NotificationEngine.create_notification(
+                                db=db,
+                                user_id=user.id,
+                                title=f"{alert['level']} {device.name}: {alert['scenario']}",
+                                message=alert["message"],
+                                notification_type=notif_type,
+                                severity=severity,
+                                home_id=home.id,
+                                device_id=device.id,
+                                action_hint=f"View {device.name} analytics",
+                                action_button_text="View Device",
+                                requires_user_action=severity == "CRITICAL",
+                                metadata={
+                                    "appliance_key": device.appliance_key,
+                                    "priority": alert["priority"],
+                                    "scenario": alert["scenario"],
+                                    "efficiency_score": optimization["efficiency_score"],
+                                },
+                                send_push=True,
+                            )
+            except Exception as e:
+                logger.error(f"Error in smart device check for user {user.id}: {e}")
+
+        logger.info("Smart device scenario notification check complete")

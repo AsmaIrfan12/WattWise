@@ -114,8 +114,13 @@ function showLoginOverlay() {
       if (!data.is_admin) { errEl.textContent = 'Access denied: not an admin account.'; return; }
       sessionStorage.setItem('ww_admin_token', data.access_token);
       location.reload();
-    } catch (err) {
-      errEl.textContent = err.message || 'Login failed';
+    } catch (error) {
+      console.error("Login failed:", error);
+      sessionStorage.removeItem("ww_admin_token");
+      errEl.textContent = error.message || "Login failed. Please check your credentials.";
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Sign In";
     }
   });
 }
@@ -612,6 +617,202 @@ function exportCsv(data) {
   a.click();
 }
 
+// ── Advanced Comparison ───────────────────────────────────────
+let _lastComparisonData = null;
+
+async function initAdvancedComparison() {
+  const typeSelect = document.getElementById('compare-entity-type');
+  const targetContainer = document.getElementById('compare-entity-ids');
+  
+  // Set default dates
+  const today = new Date().toISOString().slice(0,10);
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0,10);
+  document.getElementById('compare-start').value = monthAgo;
+  document.getElementById('compare-end').value = today;
+
+  const populateTargets = async () => {
+    targetContainer.innerHTML = '<div style="padding:10px; color:var(--text-muted)">Loading...</div>';
+    if (typeSelect.value === 'user') {
+      const users = await api('/api/admin/users?limit=1000');
+      if (users && users.length) {
+        targetContainer.innerHTML = users.map(u => 
+          `<label class="checkbox-label"><input type="checkbox" value="${u.id}"> ${DOMPurify.sanitize(u.name)}</label>`
+        ).join('');
+      } else {
+        targetContainer.innerHTML = '<div style="padding:10px; color:var(--text-muted)">No users found</div>';
+      }
+      document.querySelectorAll('.device-metric').forEach(el => el.style.display = 'none');
+    } else {
+      const devices = await api('/api/admin/devices/status');
+      if (devices && devices.length) {
+        targetContainer.innerHTML = devices.map(d => 
+          `<label class="checkbox-label"><input type="checkbox" value="${d.device_id}"> ${DOMPurify.sanitize(d.device_name)} (${DOMPurify.sanitize(d.user)})</label>`
+        ).join('');
+      } else {
+        targetContainer.innerHTML = '<div style="padding:10px; color:var(--text-muted)">No devices found</div>';
+      }
+      document.querySelectorAll('.device-metric').forEach(el => el.style.display = 'block');
+    }
+  };
+
+  typeSelect.addEventListener('change', populateTargets);
+  populateTargets(); // auto-load on start
+
+  document.getElementById('btn-run-compare').addEventListener('click', async () => {
+    const entity_type = typeSelect.value;
+    const entity_ids = Array.from(document.querySelectorAll('#compare-entity-ids input:checked')).map(cb => parseInt(cb.value));
+    const metrics = Array.from(document.querySelectorAll('#compare-metric input:checked')).map(cb => cb.value);
+    const start_date = document.getElementById('compare-start').value;
+    const end_date = document.getElementById('compare-end').value;
+
+    if (!entity_ids.length || !metrics.length) {
+      toast('Please select at least one target and one metric.', 'error');
+      return;
+    }
+
+    const btn = document.getElementById('btn-run-compare');
+    btn.textContent = 'Running...';
+    btn.disabled = true;
+
+    try {
+      const res = await api('/api/admin/analytics/compare', {
+        method: 'POST',
+        body: JSON.stringify({ entity_type, entity_ids, start_date, end_date, metrics })
+      });
+      _lastComparisonData = { datasets: res.datasets, metrics };
+      renderComparisonChart(res.datasets, metrics);
+    } catch (err) {
+      toast('Comparison failed: ' + err.message, 'error');
+    } finally {
+      btn.textContent = 'Compare';
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('btn-compare-export').addEventListener('click', () => {
+    if (!_lastComparisonData) {
+      toast('No data to export. Run a comparison first.', 'error');
+      return;
+    }
+    const { datasets, metrics } = _lastComparisonData;
+    
+    const dateSet = new Set();
+    datasets.forEach(ds => ds.data.forEach(d => dateSet.add(d.date)));
+    const labels = Array.from(dateSet).sort();
+
+    let csvContent = 'Date,' + datasets.map(ds => metrics.map(m => `"${ds.entity_name} - ${m}"`).join(',')).join(',') + '\n';
+    
+    labels.forEach(date => {
+      let row = [date];
+      datasets.forEach(ds => {
+        const pt = ds.data.find(d => d.date === date);
+        metrics.forEach(m => {
+          row.push(pt && pt[m] !== undefined ? pt[m] : '');
+        });
+      });
+      csvContent += row.join(',') + '\n';
+    });
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute('download', 'advanced_comparison_export.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  });
+
+  document.getElementById('btn-compare-alert').addEventListener('click', () => {
+    if (!_lastComparisonData || !_lastComparisonData.datasets.length) {
+      toast('No data to evaluate. Run a comparison first.', 'error');
+      return;
+    }
+    const typeSelect = document.getElementById('compare-entity-type').value;
+    let userIds = [];
+    if (typeSelect === 'user') {
+      userIds = _lastComparisonData.datasets.map(d => d.entity_id);
+    } else {
+      userIds = _lastComparisonData.datasets.map(d => d.target_user_id).filter(Boolean);
+    }
+    const uniqueUserIds = [...new Set(userIds)];
+    
+    if (!uniqueUserIds.length) {
+      toast('Could not resolve user targets for the selected items.', 'error');
+      return;
+    }
+
+    // Navigate and Pre-fill Notification Modal
+    navigateTo('notifications');
+    const targetSelect = document.getElementById('notif-target');
+    targetSelect.value = 'specific';
+    targetSelect.dispatchEvent(new Event('change')); // Trigger display of extra input
+    document.getElementById('notif-user-ids').value = uniqueUserIds.join(', ');
+    document.getElementById('notif-title').value = "Anomaly Detected in your Energy Profile";
+    document.getElementById('notif-message').value = "We noticed abnormal energy signatures from your recent comparison records. Please check your appliance cycles.";
+    
+    // Scroll to the notification form
+    document.getElementById('notif-form').scrollIntoView({ behavior: 'smooth' });
+  });
+}
+
+function renderComparisonChart(datasets, metrics) {
+  destroyChart('chart-advanced-compare');
+  const ctx = document.getElementById('chart-advanced-compare')?.getContext('2d');
+  if (!ctx) return;
+
+  if (!datasets || !datasets.length || datasets.every(ds => !ds.data.length)) {
+    toast('No comparative data found for the selected range.', 'info');
+    return;
+  }
+
+  // Extract all unique dates to form the x-axis
+  const dateSet = new Set();
+  datasets.forEach(ds => ds.data.forEach(d => dateSet.add(d.date)));
+  const labels = Array.from(dateSet).sort();
+
+  const chartDatasets = [];
+  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6', '#f43f5e'];
+
+  datasets.forEach((ds, dsIndex) => {
+    const color = colors[dsIndex % colors.length];
+    
+    metrics.forEach((metric, mIndex) => {
+      // Map data aligned to labels
+      const dataAligned = labels.map(label => {
+        const point = ds.data.find(d => d.date === label);
+        return point ? point[metric] : null;
+      });
+
+      const isDashed = mIndex > 0;
+      
+      chartDatasets.push({
+        label: `${ds.entity_name} - ${metric}`,
+        data: dataAligned,
+        borderColor: color,
+        backgroundColor: color + '20',
+        borderDash: isDashed ? [5, 5] : [],
+        tension: 0.3,
+        fill: false,
+        spanGaps: true
+      });
+    });
+  });
+
+  _charts['chart-advanced-compare'] = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: chartDatasets },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 12 } } } },
+      scales: {
+        x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      },
+    },
+  });
+}
+
 // ── Devices ───────────────────────────────────────────────────
 async function loadDevices() {
   const tbody = document.getElementById('devices-tbody');
@@ -635,11 +836,21 @@ async function loadDevices() {
         <td><code style="font-size:11px;color:#94a3b8">${DOMPurify.sanitize(d.entity_id || '—')}</code></td>
         <td>${d.last_seen ? new Date(d.last_seen).toLocaleString('en-GB') : '—'}</td>
         <td>${d.last_power_watts != null ? `${d.last_power_watts.toFixed(1)} W` : '—'}</td>
+        <td><button class="btn-sm btn-danger" onclick="adminDeleteDevice(${d.device_id})">Delete</button></td>
       </tr>`).join('');
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="7" class="loading-row">Error: ${DOMPurify.sanitize(err.message)}</td></tr>`;
     toast('Device status load failed', 'error');
   }
+}
+
+async function adminDeleteDevice(deviceId) {
+  if (!confirm('Are you sure you want to delete this device?')) return;
+  try {
+    await api(`/api/admin/devices/${deviceId}`, { method: 'DELETE' });
+    toast('Device deleted successfully', 'success');
+    loadDevices();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // ── Notifications ─────────────────────────────────────────────
@@ -764,6 +975,24 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Logout
   document.getElementById('btn-logout').addEventListener('click', doLogout);
+
+  // Theme Toggle
+  const themeBtn = document.getElementById('btn-theme-toggle');
+  const initTheme = () => {
+    if (localStorage.getItem('wattwise_admin_theme') === 'light') {
+      document.body.classList.add('light-mode');
+      themeBtn.textContent = '🌙';
+    } else {
+      document.body.classList.remove('light-mode');
+      themeBtn.textContent = '☀️';
+    }
+  };
+  initTheme();
+  themeBtn.addEventListener('click', () => {
+    const isLight = document.body.classList.toggle('light-mode');
+    localStorage.setItem('wattwise_admin_theme', isLight ? 'light' : 'dark');
+    themeBtn.textContent = isLight ? '🌙' : '☀️';
+  });
 
   // Clock
   updateClock(); setInterval(updateClock, 1000);
@@ -902,6 +1131,19 @@ window.addEventListener('DOMContentLoaded', async () => {
     extra.style.display = e.target.value === 'specific' ? 'block' : 'none';
   });
   document.getElementById('btn-refresh-templates').addEventListener('click', loadTemplates);
+  document.getElementById('btn-smart-notif-all').addEventListener('click', async () => {
+    const fb = document.getElementById('smart-notif-feedback');
+    fb.textContent = 'Running smart notifications…';
+    fb.className = 'form-feedback';
+    try {
+      const res = await api('/api/admin/trigger-smart-notifications-all', { method: 'POST' });
+      fb.textContent = `✅ Smart notifications done: ${res.notifications_created} new, ${res.skipped_dedup} skipped (dedup), ${res.users_processed} users processed`;
+      fb.className = 'form-feedback success';
+    } catch (err) {
+      fb.textContent = `❌ ${err.message}`;
+      fb.className = 'form-feedback error';
+    }
+  });
 
   // Backup
   document.getElementById('btn-trigger-backup').addEventListener('click', async () => {
@@ -936,6 +1178,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('analytics-start').value = week;
   document.getElementById('analytics-end').value = today;
   document.getElementById('rankings-date').value = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+
+  // Initialize Advanced Comparison UI
+  initAdvancedComparison();
 
   // Load initial section
   navigateTo('dashboard');

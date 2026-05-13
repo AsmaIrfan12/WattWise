@@ -301,3 +301,35 @@ After all users migrated, remove Render.com service.
 | **System**      | WattWise — Smart Home Energy Monitoring Platform |
 | **Version**     | 4.0.0 (Community Release)                        |
 | **Contact**     | Cardiff University                               |
+
+---
+
+## 8. WattWise 4.0 System Pros & Professional Capabilities
+
+The WattWise 4.0 system has been designed by a professional developer unit to meet high-end enterprise and research standards. Below are the core capabilities and systemic strengths of the fully migrated architecture:
+
+### 1. Robust Containerized Infrastructure
+- **Microservices Architecture:** Fully containerised environment using Docker Compose isolates MySQL, Mosquitto, InfluxDB, the FastAPI backend, and Nginx reverse proxies, guaranteeing runtime consistency.
+- **Automated Self-Healing:** Systemd integration on Raspberry Pi nodes and Docker restart policies ensure the system recovers autonomously from power or network failures.
+- **Reverse Proxy & Load Balancing:** Nginx manages all incoming domain traffic, handling WebSockets for MQTT and HTTPS/SSL certification (via Certbot/Let's Encrypt), forwarding requests cleanly to internal ports `:8000`, `:3000`, and `:3001` over securely isolated Docker networking.
+
+### 2. High-End Administrative Command Centre
+- **Complete Overview & Control:** The Admin Portal (Next.js) provides a real-time, global view of the entire smart community, tracking overall consumption, grid usage, and individual home performances.
+- **Cross-Home Comparative Analytics:** Allows administrators to stack user performances against each other seamlessly across custom periods (hours/days/months/years).
+- **Automated Persona Classification:** Users are dynamically segmented into profiles (e.g., *Eco-Champion*, *Peak-Time Heavy*) based on their calculated efficiency scores, standard deviations, and reaction to actionable notifications.
+- **Bulk Operations:** Admins can trigger bulk notification broadcasts, database exports (JSON/CSV), trigger password resets, and manually run complex ML classifier algorithms on community data.
+
+### 3. Advanced Energy Analytics Suite
+- **Anomaly Detection:** Utilises Z-Score standard deviation tracking to instantly flag abnormal energy spikes or sudden drops, triggering critical alerts.
+- **Rolling Bill Predictions:** 7-day rolling window extrapolation dynamically projects end-of-month electricity bills based on live consumption behaviour and multi-tiered UK Grid tariffs (standard/peak/off-peak).
+- **Live Carbon Footprint Tracking:** Converts raw kWh data into CO₂e factors tied to live UK grid carbon intensity, giving users tangible environmental impact tracking.
+
+### 4. Enterprise-Grade Security
+- **Strict Security Pipelines:** The system will fail to boot if default development passwords are used in production (`STRICT_SECURITY=true`), forcing enterprise credential compliance.
+- **Hardened IoT Telemetry:** The Mosquitto broker strictly checks incoming Raspberry Pi connections against an encrypted `.htpasswd` file mounted deeply into the container.
+- **Stateless Authentication:** JSON Web Token (JWT) architecture propagates securely through the middleware (`request.state.user_id`), standardising access controls without blocking async routines.
+- **Data Redundancy:** A dedicated database backup container initiates chron-based SQL dumps hourly/daily to prevent any catastrophic data loss.
+
+### 5. Smart Home User Experience
+- **Progressive Dashboards:** Users engage with a highly rich, dynamic interface built using modern React/Next.js frameworks displaying vibrant, interactive charts and KPI metric tiles.
+- **Push Native Actionability:** Android applications leverage Expo Push to deliver rich alerts that deep-link straight to the user's portal, directly influencing behaviour and immediately logging the user's decision (Tracker PhD Model) into the database.

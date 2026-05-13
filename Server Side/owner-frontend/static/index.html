@@ -10,7 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
-  <link rel="stylesheet" href="/static/css/admin.css"/>
+  <link rel="stylesheet" href="/css/admin.css"/>
 </head>
 <body>
 
@@ -77,6 +77,7 @@
       <h1 class="page-title" id="page-title">Dashboard</h1>
     </div>
     <div class="topbar-right">
+      <button class="btn-icon" id="btn-theme-toggle" aria-label="Toggle Theme" style="margin-right:8px">☀️</button>
       <div class="connection-badge" id="connection-badge">
         <span class="dot green"></span> Live
       </div>
@@ -329,6 +330,56 @@
       </div>
       <canvas id="chart-interactions" height="60"></canvas>
     </div>
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title">Advanced Comparative Analytics</h2>
+        <div class="card-actions" style="display: flex; gap: 10px;">
+          <button class="btn-sm btn-outline" id="btn-compare-alert">🔔 Alert Targets</button>
+          <button class="btn-sm btn-outline" id="btn-compare-export">📥 Export CSV</button>
+        </div>
+      </div>
+      <div style="padding:20px; border-bottom: 1px solid var(--border);">
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:150px">
+            <label class="form-label">Compare Mode</label>
+            <select id="compare-entity-type" class="input-field">
+              <option value="user">Users vs Users</option>
+              <option value="device">Devices vs Devices</option>
+            </select>
+            
+            <label class="form-label" style="margin-top:15px">Date Range</label>
+            <input type="date" id="compare-start" class="input-date" style="margin-bottom:8px"/>
+            <input type="date" id="compare-end" class="input-date"/>
+          </div>
+          
+          <div style="flex:2; min-width:200px">
+            <label class="form-label">Select Targets</label>
+            <div id="compare-entity-ids" class="input-field checkbox-list scrollable">
+              <div style="padding:10px; color:var(--text-muted)">Loading...</div>
+            </div>
+          </div>
+          
+          <div style="flex:1; min-width:150px">
+            <label class="form-label">Select Metrics</label>
+            <div id="compare-metric" class="input-field checkbox-list scrollable">
+              <label class="checkbox-label"><input type="checkbox" value="total_kwh" checked> Energy (kWh)</label>
+              <label class="checkbox-label"><input type="checkbox" value="cost_gbp"> Cost (£)</label>
+              <label class="checkbox-label"><input type="checkbox" value="peak_watts"> Peak Load (W)</label>
+              <label class="checkbox-label"><input type="checkbox" value="avg_watts"> Avg Load (W)</label>
+              <label class="checkbox-label"><input type="checkbox" value="efficiency_score"> Efficiency (%)</label>
+              <label class="checkbox-label device-metric" style="display:none"><input type="checkbox" value="active_minutes"> Active Mins</label>
+            </div>
+          </div>
+          
+          <div style="display:flex; align-items:flex-end;">
+            <button class="btn-primary" id="btn-run-compare" style="height:100%; min-height:40px; padding:0 24px">Compare</button>
+          </div>
+        </div>
+      </div>
+      <div style="padding:20px">
+        <canvas id="chart-advanced-compare" height="100"></canvas>
+      </div>
+    </div>
   </section>
 
   <!-- ── SECTION: DEVICES ──────────────────────────────────── -->
@@ -346,11 +397,11 @@
           <thead>
             <tr>
               <th>Status</th><th>Device</th><th>Home</th><th>User</th>
-              <th>Entity ID</th><th>Last Seen</th><th>Power (W)</th>
+              <th>Entity ID</th><th>Last Seen</th><th>Power (W)</th><th>Actions</th>
             </tr>
           </thead>
           <tbody id="devices-tbody">
-            <tr><td colspan="7" class="loading-row">Loading devices…</td></tr>
+            <tr><td colspan="8" class="loading-row">Loading devices…</td></tr>
           </tbody>
         </table>
       </div>
@@ -399,6 +450,17 @@
           <button type="submit" class="btn-primary btn-full" id="btn-notif-send">Send Notification</button>
           <div id="notif-feedback" class="form-feedback"></div>
         </form>
+      </div>
+
+      <!-- Smart Notification Engine -->
+      <div class="card">
+        <div class="card-header"><h2 class="card-title">Smart Notification Engine</h2></div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 16px">
+          Runs the appliance-scenario engine for every user who has notifications enabled.
+          Uses today's usage data + environmental factors. Deduplication: 12-hour window per device.
+        </p>
+        <button class="btn-primary" id="btn-smart-notif-all">🔔 Run Smart Notifications Now</button>
+        <div id="smart-notif-feedback" class="form-feedback" style="margin-top:12px"></div>
       </div>
 
       <!-- Templates -->
@@ -516,6 +578,6 @@
 <!-- Toast -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/static/js/admin.js"></script>
+<script src="/js/admin.js"></script>
 </body>
 </html>

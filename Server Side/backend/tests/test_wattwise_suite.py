@@ -156,9 +156,10 @@ class TestMqttInputValidation:
 class TestEntityIdSanitization:
 
     def _sanitize(self, entity_id: str) -> str:
-        """Replicates the regex used in rpi_mqtt_publisher.py."""
-        import re
-        return re.sub(r"[^a-zA-Z0-9_\.\-]", "", entity_id)
+        """Use the backend MQTT sanitizer so tests track the active code path."""
+        from app.mqtt_client import _sanitize_entity_id
+
+        return _sanitize_entity_id(entity_id)
 
     def test_clean_entity_id_unchanged(self):
         assert self._sanitize("switch.kettle") == "switch.kettle"

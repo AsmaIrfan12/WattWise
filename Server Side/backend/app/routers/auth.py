@@ -1,7 +1,6 @@
 """WattWise — Authentication Router."""
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -34,11 +33,19 @@ login_rate_limiter = SlidingWindowRateLimiter(
 
 
 def _hash_password(password: str) -> str:
+    if not settings.ENABLE_PASSWORD_HASHING:
+        return password
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt(12)).decode()
 
 
 def _verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
+    if not settings.ENABLE_PASSWORD_HASHING:
+        return password == hashed
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except (ValueError, Exception):
+        # Fallback: if hashing was just enabled but record is still plaintext
+        return password == hashed
 
 
 def _create_token(user_id: int, is_admin: bool = False) -> str:
@@ -60,7 +67,6 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """JWT dependency for protected routes."""
-    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
     # Token is injected via Depends(verify_token) in route-level code
     raise HTTPException(status_code=401, detail="Not authenticated")
 

@@ -1,18 +1,24 @@
 """WattWise — Application Configuration."""
 
 import logging as _logging
-import secrets
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # MySQL (Relational data)
-    DATABASE_URL: str = "mysql+aiomysql://wattwise_app:changeme_app_2026@mysql:3306/wattwise_db"
+    # MySQL (Relational data) — Dynamically constructed for Host/Docker compatibility
+    DB_USER: str = "wattwise_app"
+    DB_PASS: str = "changeme_app_2026"
+    DB_HOST: str = "mysql"
+    DB_PORT: int = 3306
+    DB_NAME: str = "wattwise_db"
+
+    @property
+    def DATABASE_URL(self) -> str:
+        # Construct async MySQL URL
+        return f"mysql+aiomysql://{self.DB_USER}:{self.DB_PASS}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     # InfluxDB (Time-series energy telemetry)
     INFLUX_HOST: str = "influxdb"
@@ -35,6 +41,7 @@ class Settings(BaseSettings):
     STRICT_SECURITY: bool = False
     LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
     LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 10
+    ENABLE_PASSWORD_HASHING: bool = False
 
     # UK Energy Tariff Rates (£/kWh)
     ENERGY_STANDARD_PRICE_PER_KWH: float = 0.2700

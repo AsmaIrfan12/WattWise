@@ -12,10 +12,12 @@ package com.wattwise.userapp.util
 object Constants {
 
     // ── Production Server ────────────────────────────────────────
-    // Set to production WattWise cloud URL before building release APK
+    // Self-hosted Docker backend — update this to your server address.
+    // Tailscale RPI tunnel: homeassistant.tail5340f7.ts.net
+    // Local network fallback: http://192.168.x.x:8000
     const val DEFAULT_SERVER_URL = "https://www.talk2futurebuildings.systems"
     const val DEFAULT_PORT       = 443               // HTTPS
-    const val DEFAULT_API_PORT   = 8000              // FastAPI backend
+    const val DEFAULT_API_PORT   = 8000              // FastAPI backend (Docker)
     const val DEFAULT_TIMEOUT    = 20
 
     // ── Notification Channels ────────────────────────────────────
@@ -37,6 +39,17 @@ object Constants {
     const val API_LEADERBOARD    = "/api/rankings/leaderboard"
     const val API_PUSH_TOKEN     = "/api/auth/push-token"
     const val API_HEALTH         = "/health"
+
+    // ── New Endpoints (migrated from old backend) ─────────────────
+    const val API_SMART_NOTIFICATIONS = "/api/smart-notifications"
+    const val API_DEVICE_CHECK        = "/api/smart-notifications/check"
+    const val API_TRIGGER_NOTIFS      = "/api/smart-notifications/trigger"
+    const val API_ENVIRONMENT_ROOMS   = "/api/environment/rooms"
+    const val API_ENVIRONMENT_SUMMARY = "/api/environment/summary"
+    const val API_INFLUX_ENTITIES     = "/api/influx/entities"
+    const val API_INFLUX_HEALTH       = "/api/influx/health"
+    const val API_ANALYSIS_REPORT     = "/api/analysis/report"
+    const val API_BENCHMARK           = "/api/rankings/community-benchmark"
 
     // ── Developer & Research Details ─────────────────────────────
     const val DEVELOPER_NAME         = "Mr. Suhas Devmane"

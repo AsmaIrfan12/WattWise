@@ -39,7 +39,7 @@ log = logging.getLogger("wattwise-dummy")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DEFAULT_BASE_URL    = "http://localhost:8000"
-SEND_INTERVAL_SEC   = 300       # 5 minutes between live readings
+SEND_INTERVAL_SEC   = 0.1       # 5 minutes between live readings
 BACKFILL_DAYS       = 2         # days of historical data to seed
 BACKFILL_INTERVAL   = 5         # minutes between backfill readings
 REQUEST_TIMEOUT     = 5         # seconds per HTTP request
@@ -48,22 +48,24 @@ LIVE_WORKERS        = 8         # parallel threads for live sends
 MAX_RETRIES         = 3         # retries per reading on transient failures
 
 # ── Dummy credentials ─────────────────────────────────────────────────────────
-DUMMY_ACCOUNTS = [
-    {"email": "liam.jenkins@wattwise-test.co.uk",    "password": "WattTest2024!"},
-    {"email": "priya.sharma@wattwise-test.co.uk",    "password": "WattTest2024!"},
-    {"email": "owen.davies@wattwise-test.co.uk",     "password": "WattTest2024!"},
-    {"email": "sophie.williams@wattwise-test.co.uk", "password": "WattTest2024!"},
-    {"email": "m.hassan@wattwise-test.co.uk",        "password": "WattTest2024!"},
-    {"email": "emma.thomas@wattwise-test.co.uk",     "password": "WattTest2024!"},
-    {"email": "c.murphy@wattwise-test.co.uk",        "password": "WattTest2024!"},
-    {"email": "aisha.patel@wattwise-test.co.uk",     "password": "WattTest2024!"},
-    {"email": "j.roberts@wattwise-test.co.uk",       "password": "WattTest2024!"},
-    {"email": "f.alrashid@wattwise-test.co.uk",      "password": "WattTest2024!"},
-    {"email": "r.evans@wattwise-test.co.uk",         "password": "WattTest2024!"},
-    {"email": "n.kowalski@wattwise-test.co.uk",      "password": "WattTest2024!"},
-    {"email": "t.hughes@wattwise-test.co.uk",        "password": "WattTest2024!"},
-    {"email": "m.lin@wattwise-test.co.uk",           "password": "WattTest2024!"},
-]
+import csv
+
+def load_dummy_accounts(csv_path: str = "wattwise_cardiff_participants_20260403-105251.csv"):
+    accounts = []
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row["Email"].strip():
+                    accounts.append({
+                        "email": row["Email"].strip(),
+                        "password": row["Password"].strip(),
+                    })
+    except FileNotFoundError:
+        log.warning("CSV not found: %s", csv_path)
+    return accounts
+
+DUMMY_ACCOUNTS: list = []
 
 # ── Appliance profiles (UK 230V, realistic usage patterns) ───────────────────
 PROFILES = {
@@ -406,6 +408,8 @@ def main():
                         help="Number of live cycles to run (0 = infinite)")
     parser.add_argument("--admin-email",   default=os.getenv("ADMIN_EMAIL", ""))
     parser.add_argument("--admin-password", default=os.getenv("ADMIN_PASSWORD", ""))
+    parser.add_argument("--csv", default="wattwise_cardiff_participants_20260403-105251.csv",
+                        help="Path to participants CSV file")
     args = parser.parse_args()
 
     if args.interval <= 0:
@@ -417,6 +421,12 @@ def main():
         sys.exit(2)
 
     log.info("WattWise Dummy Data Sender  |  API: %s", args.url)
+
+    global DUMMY_ACCOUNTS
+    DUMMY_ACCOUNTS = load_dummy_accounts(args.csv)
+    if not DUMMY_ACCOUNTS:
+        log.error("No accounts loaded from CSV: %s", args.csv)
+        sys.exit(1)
 
     client   = WattWiseClient(args.url)
     sessions = build_sessions(client)

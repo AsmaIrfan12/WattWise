@@ -1,10 +1,10 @@
 """WattWise — Energy Readings Router."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -26,7 +26,7 @@ def _get_user_id(request: Request) -> int:
 async def _verify_device_access(db: AsyncSession, device_id: int, user_id: int) -> Device:
     result = await db.execute(
         select(Device).join(Home, Device.home_id == Home.id)
-        .where(Device.id == device_id, Home.user_id == user_id, Device.is_active == True)
+        .where(Device.id == device_id, Home.user_id == user_id, Device.is_active)
     )
     device = result.scalar_one_or_none()
     if not device:
@@ -121,14 +121,24 @@ async def get_daily(
     request: Request,
     db: AsyncSession = Depends(get_db),
     days: int = Query(default=30, ge=1, le=365),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
 ):
     user_id = _get_user_id(request)
     await _verify_device_access(db, device_id, user_id)
-    from datetime import date
-    since = (datetime.utcnow() - timedelta(days=days)).date()
+    if start_date and end_date:
+        since = start_date
+        until = end_date
+    else:
+        until = date.today()
+        since = until - timedelta(days=days)
     result = await db.execute(
         select(DailySummary)
-        .where(DailySummary.device_id == device_id, DailySummary.day_date >= since)
+        .where(
+            DailySummary.device_id == device_id,
+            DailySummary.day_date >= since,
+            DailySummary.day_date <= until,
+        )
         .order_by(DailySummary.day_date.asc())
     )
     return result.scalars().all()
@@ -186,7 +196,7 @@ async def get_home_today(home_id: int, request: Request, db: AsyncSession = Depe
         raise HTTPException(status_code=404, detail="Home not found")
 
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    devices_result = await db.execute(select(Device).where(Device.home_id == home_id, Device.is_active == True))
+    devices_result = await db.execute(select(Device).where(Device.home_id == home_id, Device.is_active))
     devices = devices_result.scalars().all()
 
     summary = []

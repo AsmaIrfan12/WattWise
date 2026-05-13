@@ -19,7 +19,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import UserDecision, Notification, EnergyReading, Device
+from app.models import UserDecision, Notification
 from app.energy_analysis import EnergyAnalysisEngine
 
 logger = logging.getLogger("decision_tracker")

@@ -1,12 +1,11 @@
 import os
-import json
 import logging
 import logging.config
 from datetime import datetime
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -26,6 +25,7 @@ from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 from app.routers import advanced
+from app.routers import influx, environment, smart_notifications
 
 
 def _configure_logging():
@@ -134,6 +134,19 @@ async def _job_classify_personas():
         logger.info("Persona classification: %s", summary)
 
 
+async def _job_analytics_evaluator():
+    from app.scheduler import evaluate_analytics_thresholds
+    await _run_tracked_job("analytics_eval", evaluate_analytics_thresholds)
+
+
+async def _job_smart_device_check():
+    """Run smart appliance scenario checks for all users every 2 hours."""
+    from app.database import AsyncSessionLocal
+    from app.notification_engine import NotificationEngine
+    async with AsyncSessionLocal() as db:
+        await NotificationEngine.check_device_scenario_notifications(db)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -169,6 +182,7 @@ async def lifespan(app: FastAPI):
     # Schedule recurring jobs
     scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
     scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
+    scheduler.add_job(_job_analytics_evaluator,"cron",       hour=0,    minute=30,         id="analytics_eval")
     scheduler.add_job(_job_goal_check,         "interval",   hours=1,                     id="goal_check")
     scheduler.add_job(_job_peak_reminder,      "cron",       hour=15,   minute=45,         id="peak_reminder")
     scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
@@ -176,8 +190,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
     scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
     scheduler.add_job(_job_classify_personas,  "cron",       day_of_week="sun", hour=2,    minute=0,  id="classify_personas")
+    scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
     scheduler.start()
-    logger.info("✅ Scheduler started with 9 jobs (incl. weekly persona classification)")
+    logger.info("✅ Scheduler started with 11 jobs")
 
     yield
 
@@ -314,6 +329,9 @@ app.include_router(admin.router)
 app.include_router(export.router)
 app.include_router(backup.router)
 app.include_router(advanced.router)
+app.include_router(influx.router)
+app.include_router(environment.router)
+app.include_router(smart_notifications.router)
 
 
 # ── Health ────────────────────────────────────────────────────

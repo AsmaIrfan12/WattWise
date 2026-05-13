@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User, Home, HomeDailyTotal, EnergyRanking, UserDecision, Persona
+from app.models import User, EnergyRanking, UserDecision, Persona
 
 logger = logging.getLogger("persona_classifier")
 

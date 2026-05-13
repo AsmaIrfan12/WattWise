@@ -515,7 +515,8 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
         <select id="dev-type">
           <option value="kettle">Kettle</option><option value="washing_machine">Washing Machine</option>
           <option value="dishwasher">Dishwasher</option><option value="dryer">Dryer</option>
-          <option value="microwave">Microwave</option><option value="gaming_console">Gaming Console</option>
+          <option value="microwave">Microwave</option><option value="toaster">Toaster</option>
+          <option value="airfryer">Air Fryer</option><option value="gaming_console">Gaming Console</option>
           <option value="tv">TV</option><option value="other">Other</option>
         </select>
       </label>
@@ -679,6 +680,8 @@ let token = localStorage.getItem('ww_token') || '';
 let homeId = null, userId = null, userData = null;
 let _charts = {};
 let _pendingNotifCount = 0;
+let _activeSection = 'home';
+let _homeRefreshTimer = null;
 
 // ── Sanitize ────────────────────────────────────────────────
 function san(s) {
@@ -734,6 +737,7 @@ const loaders = {
 };
 
 function goSection(name) {
+  _activeSection = name;
   document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
   document.getElementById('s-' + name)?.classList.add('active');
   document.querySelectorAll('.tab').forEach(t => { if (t.dataset.sec === name) t.classList.add('active'); });
@@ -742,7 +746,7 @@ function goSection(name) {
 
 // ── Icons ─────────────────────────────────────────────────────
 function iconFor(key) {
-  const m = { kettle: '☕', washing_machine: '👕', dryer: '🔄', dishwasher: '🍽️', microwave: '📡', gaming_console: '🎮', tv: '📺', toaster: '🍞', cooker: '🍳', other: '🔌', xbox: '🎮' };
+  const m = { kettle: '☕', washing_machine: '👕', dryer: '🔄', dishwasher: '🍽️', microwave: '📡', gaming_console: '🎮', tv: '📺', toaster: '🍞', airfryer: '🍟', cooker: '🍳', other: '🔌', xbox: '🎮' };
   return m[key] || '🔌';
 }
 
@@ -794,6 +798,10 @@ function logout() {
   token = '';
   localStorage.removeItem('ww_token');
   homeId = null; userId = null; userData = null;
+  if (_homeRefreshTimer) {
+    clearInterval(_homeRefreshTimer);
+    _homeRefreshTimer = null;
+  }
   setAuthUi(false);
   document.getElementById('av').textContent = '?';
   document.getElementById('persona-chip').style.display = 'none';
@@ -822,16 +830,20 @@ async function init() {
     if (homes?.length) homeId = homes[0].id;
     document.getElementById('av').textContent = userData.name?.[0]?.toUpperCase() || 'U';
     setAuthUi(true);
-    populatePersonaChip(userData);
-    loadHome();
+    await populatePersonaChip(userData);
+    await loadHome();
     refreshNotifBadge();
+    if (_homeRefreshTimer) clearInterval(_homeRefreshTimer);
+    _homeRefreshTimer = setInterval(() => {
+      if (_activeSection === 'home' && token) loadHome();
+    }, 30_000);
     populateGoalDeviceDropdown();
   } catch {
     logout();
   }
 }
 
-function populatePersonaChip(u) {
+async function populatePersonaChip(u) {
   if (!u.persona_id) return;
   const colours = {
     'Eco Champion':    ['#10b981', 'rgba(16,185,129,.15)'],
@@ -840,7 +852,17 @@ function populatePersonaChip(u) {
     'High Consumer':   ['#f59e0b', 'rgba(245,158,11,.15)'],
     'Disengaged':      ['#6b7280', 'rgba(107,114,128,.15)'],
   };
-  // We only have persona_id, not name, from auth/me — chip will show after settings load
+  try {
+    const personas = await apiFetch('/analysis/personas');
+    const p = (personas || []).find(x => x.id === u.persona_id);
+    if (!p) return;
+    const chip = document.getElementById('persona-chip');
+    if (!chip) return;
+    chip.textContent = p.name;
+    chip.style.background = colours[p.name]?.[1] || 'rgba(139,92,246,.15)';
+    chip.style.color = colours[p.name]?.[0] || '#8b5cf6';
+    chip.style.display = 'inline-flex';
+  } catch {}
 }
 
 async function refreshNotifBadge() {
@@ -876,8 +898,31 @@ async function loadHome() {
     document.getElementById('peak-badge').style.display = isPeak ? 'inline-block' : 'none';
     document.getElementById('h-tariff-label').textContent = tariffP + 'p per kWh';
 
-    // Bill prediction
-    buildBillPrediction(data);
+    // Bill prediction — fetch 7-day history for rolling average
+    try {
+      const devs = data.devices || [];
+      if (devs.length > 0) {
+        const allDailies = await Promise.all(
+          devs.map(d => apiFetch(`/readings/${d.device_id}/daily?days=7`).catch(() => []))
+        );
+        const dayCosts = {};
+        allDailies.forEach(daily => {
+          (daily || []).forEach(row => {
+            if (!dayCosts[row.day_date]) dayCosts[row.day_date] = 0;
+            dayCosts[row.day_date] += (row.estimated_cost_gbp || (row.total_kwh || 0) * 0.27);
+          });
+        });
+        const vals = Object.values(dayCosts);
+        const avgDailyCost = vals.length >= 2
+          ? vals.reduce((a, b) => a + b, 0) / vals.length
+          : data.total_cost_gbp || 0;
+        buildBillPrediction(data, avgDailyCost);
+      } else {
+        buildBillPrediction(data, null);
+      }
+    } catch {
+      buildBillPrediction(data, null);
+    }
 
     // Device breakdown
     const colours = ['#16a34a','#0ea5e9','#f59e0b','#8b5cf6','#ef4444','#ec4899','#14b8a6','#f97316'];
@@ -922,12 +967,11 @@ async function loadHome() {
   loadCommunityBenchmarkPreview();
 }
 
-function buildBillPrediction(data) {
+function buildBillPrediction(data, avgDailyCost) {
   const now = new Date();
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const dailyCost = data.total_cost_gbp || 0;
-  // Use last 7 days average if possible, fallback to today
+  const dailyCost = avgDailyCost != null ? avgDailyCost : (data.total_cost_gbp || 0);
   const projectedMonthly = dailyCost * daysInMonth;
   const pct = (dayOfMonth / daysInMonth * 100).toFixed(0);
 
@@ -1006,8 +1050,19 @@ async function loadEnergy() {
   if (!homeId) return;
   destroyChart('energyChart'); destroyChart('costChart'); destroyChart('devicePieChart');
 
-  const days = { daily: 1, '7d': 7, '30d': 30 }[_energyPeriod] || 7;
-  document.getElementById('energy-chart-title').textContent = `Energy Usage (Last ${days} day${days > 1 ? 's' : ''})`;
+  let queryParam;
+  let chartTitle;
+  if (_energyPeriod === 'custom') {
+    const s = document.getElementById('range-start').value;
+    const e = document.getElementById('range-end').value;
+    queryParam = (s && e) ? `start_date=${s}&end_date=${e}` : 'days=7';
+    chartTitle = (s && e) ? `Energy Usage (${s} → ${e})` : 'Energy Usage (Last 7 days)';
+  } else {
+    const days = { daily: 1, '7d': 7, '30d': 30 }[_energyPeriod] || 7;
+    queryParam = `days=${days}`;
+    chartTitle = `Energy Usage (Last ${days} day${days > 1 ? 's' : ''})`;
+  }
+  document.getElementById('energy-chart-title').textContent = chartTitle;
 
   try {
     const devs = await apiFetch('/homes/' + homeId + '/devices');
@@ -1015,7 +1070,7 @@ async function loadEnergy() {
 
     // Fetch daily data for each device
     const allDailies = await Promise.all(
-      devs.map(d => apiFetch(`/readings/${d.id}/daily?days=${days}`).catch(() => []))
+      devs.map(d => apiFetch(`/readings/${d.id}/daily?${queryParam}`).catch(() => []))
     );
 
     // Aggregate across devices by date

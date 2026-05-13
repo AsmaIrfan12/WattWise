@@ -3,6 +3,7 @@
 from datetime import datetime, date, timedelta
 from typing import Optional, List
 
+from pydantic import BaseModel
 import bcrypt
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
@@ -13,7 +14,8 @@ from app.database import get_db
 from app.models import (
     User, Home, Device, Notification, UserDecision,
     AdminNotificationTemplate, EnergyRanking, HomeDailyTotal,
-    UserInteractionLog, Persona, AdminAuditLog, EnergyReading
+    UserInteractionLog, Persona, AdminAuditLog, EnergyReading,
+    DailySummary
 )
 from app.schemas import (
     AdminNotificationSend, AdminTemplateCreate,
@@ -523,6 +525,111 @@ async def get_user_interaction_stats(
             for r in rows]
 
 
+class CompareRequest(BaseModel):
+    entity_type: str  # "user" or "device"
+    entity_ids: List[int]
+    start_date: str
+    end_date: str
+    metrics: List[str]  # e.g., ["total_kwh", "cost_gbp", "active_minutes", "peak_watts", "efficiency_score"]
+
+
+@router.post("/analytics/compare")
+async def compare_analytics(req: CompareRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Advanced Comparative Analytics endpoint."""
+    _require_admin(request)
+
+    since = date.fromisoformat(req.start_date)
+    until = date.fromisoformat(req.end_date)
+    datasets = []
+
+    if req.entity_type == "user":
+        # Group metrics by user across all their homes
+        for uid in req.entity_ids:
+            user_res = await db.execute(select(User).where(User.id == uid))
+            user = user_res.scalar_one_or_none()
+            if not user:
+                continue
+
+            q = (
+                select(
+                    HomeDailyTotal.day_date,
+                    func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
+                    func.sum(HomeDailyTotal.total_cost_gbp).label("cost_gbp"),
+                    func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
+                    (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
+                    func.avg(HomeDailyTotal.efficiency_score).label("efficiency_score"),
+                )
+                .join(Home, HomeDailyTotal.home_id == Home.id)
+                .where(
+                    Home.user_id == uid,
+                    HomeDailyTotal.day_date >= since,
+                    HomeDailyTotal.day_date <= until,
+                )
+                .group_by(HomeDailyTotal.day_date)
+                .order_by(HomeDailyTotal.day_date.asc())
+            )
+            result = await db.execute(q)
+            rows = result.all()
+
+            data_points = []
+            for r in rows:
+                dp = {"date": r.day_date.isoformat()}
+                if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
+                if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.cost_gbp or 0), 2)
+                if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
+                if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
+                if "efficiency_score" in req.metrics: dp["efficiency_score"] = round(float(r.efficiency_score or 0), 2)
+                data_points.append(dp)
+
+            datasets.append({
+                "entity_id": uid,
+                "entity_name": user.name,
+                "data": data_points
+            })
+
+    elif req.entity_type == "device":
+        for did in req.entity_ids:
+            dev_res = await db.execute(
+                select(Device, Home).join(Home, Device.home_id == Home.id).where(Device.id == did)
+            )
+            row = dev_res.one_or_none()
+            if not row:
+                continue
+            device, home = row
+
+            q = (
+                select(DailySummary)
+                .where(
+                    DailySummary.device_id == did,
+                    DailySummary.day_date >= since,
+                    DailySummary.day_date <= until,
+                )
+                .order_by(DailySummary.day_date.asc())
+            )
+            result = await db.execute(q)
+            rows = result.scalars().all()
+
+            data_points = []
+            for r in rows:
+                dp = {"date": r.day_date.isoformat()}
+                if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
+                if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.estimated_cost_gbp or 0), 2)
+                if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
+                if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
+                if "active_minutes" in req.metrics: dp["active_minutes"] = r.active_minutes or 0
+                if "efficiency_score" in req.metrics: dp["efficiency_score"] = round(float(r.efficiency_score or 0), 2)
+                data_points.append(dp)
+
+            datasets.append({
+                "entity_id": did,
+                "target_user_id": home.user_id,
+                "entity_name": f"{device.name} ({device.appliance_key})",
+                "data": data_points
+            })
+
+    return {"datasets": datasets}
+
+
 # ── Device / RPi Monitoring ───────────────────────────────────
 
 @router.get("/devices/status")
@@ -555,11 +662,24 @@ async def get_device_status(request: Request, db: AsyncSession = Depends(get_db)
         output.append({
             "device_id": device.id, "device_name": device.name,
             "appliance_key": device.appliance_key, "entity_id": device.entity_id,
-            "home": home.home_name, "user": user.name,
+            "home": home.home_name, "user": user.name, "user_id": user.id,
             "online": online, "last_seen": last_seen.isoformat() if last_seen else None,
             "last_power_watts": last_power,
         })
     return output
+
+
+@router.delete("/devices/{device_id}", status_code=204)
+async def admin_delete_device(device_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Admin override to deactivate any device in the system."""
+    _require_admin(request)
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    device.is_active = False
+    await db.commit()
 
 
 # ── Audit Log ─────────────────────────────────────────────────
@@ -604,3 +724,132 @@ async def trigger_aggregations(request: Request, days: int = Query(default=2, ge
         target_date = (now - timedelta(days=d)).date()
         await aggregate_daily(target_date)
     return {"message": f"Successfully aggregated {days} days of historical data."}
+
+
+@router.post("/trigger-smart-notifications-all")
+async def trigger_smart_notifications_all(
+    request: Request, db: AsyncSession = Depends(get_db)
+):
+    """
+    Run smart notifications for every non-admin user with notifications enabled.
+    Uses existing notification types so the current DB enum and dedup logic remain valid.
+    """
+    from app.models import Room
+    from app.appliance_scenarios import calculate_optimization
+    from app.routers.smart_notifications import (
+        _build_usage_data_for_device,
+        _fetch_env_conditions,
+        _get_influx,
+    )
+
+    admin_id = _require_admin(request)
+
+    users_result = await db.execute(
+        select(User).where(User.is_admin == False, User.notifications_enabled == True)
+    )
+    users = users_result.scalars().all()
+
+    users_processed = 0
+    notifications_created = 0
+    skipped_dedup = 0
+    today = date.today()
+    influx = _get_influx()
+
+    for user in users:
+        homes_result = await db.execute(
+            select(Home).where(Home.user_id == user.id, Home.is_active == True)
+        )
+        homes = homes_result.scalars().all()
+        if not homes:
+            continue
+
+        users_processed += 1
+
+        for home in homes:
+            env = {"temperature": 20.0, "humidity": 50.0, "pressure": 101.3}
+            try:
+                rooms_result = await db.execute(select(Room).where(Room.home_id == home.id))
+                rooms = rooms_result.scalars().all()
+                if rooms:
+                    room = rooms[0]
+                    entity_base = room.entity_id or room.name.lower().replace(" ", "")
+                    env = _fetch_env_conditions(influx, entity_base)
+            except Exception:
+                pass
+
+            devices_result = await db.execute(
+                select(Device).where(Device.home_id == home.id, Device.is_active == True)
+            )
+            devices = devices_result.scalars().all()
+
+            for device in devices:
+                if not device.appliance_key:
+                    continue
+
+                daily_result = await db.execute(
+                    select(DailySummary).where(
+                        DailySummary.device_id == device.id,
+                        DailySummary.day_date == today,
+                    )
+                )
+                daily = daily_result.scalar_one_or_none()
+                usage_data = _build_usage_data_for_device(device, daily)
+
+                try:
+                    payload = calculate_optimization(
+                        appliance_key=device.appliance_key,
+                        temperature=env["temperature"],
+                        humidity=env["humidity"],
+                        pressure=env["pressure"],
+                        usage_data=usage_data,
+                    )
+                except Exception:
+                    continue
+
+                for alert in payload.get("alerts", []):
+                    if alert.get("priority") not in ("critical", "warning"):
+                        continue
+
+                    severity = "CRITICAL" if alert["priority"] == "critical" else "WARNING"
+                    notification_type = "ENERGY_ALERT" if severity == "CRITICAL" else "RECOMMENDATION"
+
+                    notif = await NotificationEngine.create_notification(
+                        db=db,
+                        user_id=user.id,
+                        title=f"⚡ {device.name}: {alert['scenario']}",
+                        message=alert.get("message", "Review your appliance usage."),
+                        notification_type=notification_type,
+                        severity=severity,
+                        home_id=home.id,
+                        device_id=device.id,
+                        requires_user_action=True,
+                        metadata={
+                            "source": "admin_trigger_all",
+                            "appliance_key": device.appliance_key,
+                            "priority": alert.get("priority"),
+                            "scenario": alert.get("scenario"),
+                            "efficiency_score": payload.get("efficiency_score"),
+                        },
+                    )
+                    if notif:
+                        notifications_created += 1
+                    else:
+                        skipped_dedup += 1
+
+    await _log_audit(
+        db,
+        admin_id,
+        "TRIGGER_SMART_NOTIFICATIONS",
+        details={
+            "users_processed": users_processed,
+            "notifications_created": notifications_created,
+            "skipped_dedup": skipped_dedup,
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {
+        "users_processed": users_processed,
+        "notifications_created": notifications_created,
+        "skipped_dedup": skipped_dedup,
+    }
