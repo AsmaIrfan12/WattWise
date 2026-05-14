@@ -1,4 +1,10 @@
 {
+  "model": "gemma-coder",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:11434",
+    "ANTHROPIC_API_KEY": "ollama",
+    "ANTHROPIC_AUTH_TOKEN": "ollama"
+  },
   "permissions": {
     "allow": [
       "Bash(docker-compose build:*)",

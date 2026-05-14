@@ -117,31 +117,81 @@ class NotificationEngine:
     async def _send_expo_push(
         push_token: str, title: str, body: str, data: dict = {}
     ) -> Optional[str]:
-        """Send a push notification via Expo Push API. Returns receipt ID or None."""
-        payload = {
-            "to": push_token,
-            "sound": "default",
-            "title": title,
-            "body": body,
-            "data": data,
-            "priority": "high",
-            "channelId": "energy-alerts" if data.get("severity") in ("ALERT", "CRITICAL") else "energy-info",
-        }
+        """Send a single push notification via Expo Push API. Returns receipt ID or None."""
+        receipts = await NotificationEngine._send_expo_push_bulk(
+            [{"push_token": push_token, "title": title, "body": body, "data": data}]
+        )
+        return receipts[0] if receipts else None
+
+    @staticmethod
+    async def _send_expo_push_bulk(messages: list[dict]) -> list[Optional[str]]:
+        """
+        Send multiple push notifications in one Expo Push API call.
+
+        Each message dict should contain: push_token, title, body, data.
+        Returns a list of receipt IDs aligned positionally with the input
+        (None entries for failed deliveries). Expo accepts up to 100 messages
+        per request, so this method automatically chunks larger batches.
+
+        Ported from old PushNotificationService.sendBulkNotifications —
+        cuts 50× round-trip overhead vs sending one-at-a-time.
+        """
+        if not messages:
+            return []
+
+        receipts: list[Optional[str]] = []
+
+        def _build_payload(m: dict) -> dict:
+            data = m.get("data") or {}
+            severity = data.get("severity")
+            channel = "energy-alerts" if severity in ("ALERT", "CRITICAL") else "energy-info"
+            unique_tag = f"{data.get('applianceKey') or data.get('notification_type') or 'wattwise'}-{int(datetime.utcnow().timestamp() * 1000)}"
+            data_with_id = {**data, "notificationId": unique_tag}
+            return {
+                "to": m["push_token"],
+                "sound": "default",
+                "title": m["title"],
+                "body": m["body"],
+                "data": data_with_id,
+                "priority": "high",
+                "channelId": channel,
+                "android": {"channelId": channel, "priority": "high", "tag": unique_tag},
+                "ios": {"_displayInForeground": True},
+            }
+
+        # Expo Push API accepts up to 100 messages per call
+        chunk_size = 100
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    settings.EXPO_PUSH_URL,
-                    json=payload,
-                    headers={"Content-Type": "application/json", "Accept": "application/json"}
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                if isinstance(result, dict) and result.get("data", {}).get("status") == "ok":
-                    return result["data"].get("id")
-                return None
-        except Exception as e:
-            logger.warning(f"Push notification failed for token {push_token[:20]}...: {e}")
-            return None
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                for i in range(0, len(messages), chunk_size):
+                    chunk = messages[i:i + chunk_size]
+                    payload = [_build_payload(m) for m in chunk]
+                    try:
+                        resp = await client.post(
+                            settings.EXPO_PUSH_URL,
+                            json=payload,
+                            headers={"Content-Type": "application/json", "Accept": "application/json"},
+                        )
+                        resp.raise_for_status()
+                        result = resp.json()
+                        # Expo bulk responses come back as { "data": [ {status, id|message}, ... ] }
+                        items = result.get("data", []) if isinstance(result, dict) else []
+                        for item in items:
+                            if isinstance(item, dict) and item.get("status") == "ok":
+                                receipts.append(item.get("id"))
+                            else:
+                                receipts.append(None)
+                        # Pad with None if Expo returned fewer entries than expected
+                        while len(receipts) < (i + len(chunk)):
+                            receipts.append(None)
+                    except Exception as exc:
+                        logger.warning("Bulk push chunk failed (i=%s, n=%s): %s", i, len(chunk), exc)
+                        receipts.extend([None] * len(chunk))
+        except Exception as exc:
+            logger.warning("Bulk push failed entirely: %s", exc)
+            return [None] * len(messages)
+
+        return receipts
 
     # ── Automated Notification Generators ────────────────────
 
@@ -282,13 +332,27 @@ class NotificationEngine:
         action_button_text: Optional[str] = None,
         requires_user_action: bool = False,
         user_ids: Optional[list[int]] = None,
+        target_persona_id: Optional[int] = None,
     ) -> int:
         """
-        Send a notification from admin to specified users (or all users if user_ids is None).
+        Send a notification from admin to a target audience.
+
+        Targeting precedence:
+          1. user_ids — explicit list of user IDs
+          2. target_persona_id — only users currently classified into that persona
+          3. (default) — all non-admin users
+
         Returns the count of notifications created.
         """
         if user_ids:
             users_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        elif target_persona_id is not None:
+            users_result = await db.execute(
+                select(User).where(
+                    User.is_admin.is_(False),
+                    User.persona_id == target_persona_id,
+                )
+            )
         else:
             users_result = await db.execute(select(User).where(User.is_admin == False))
 

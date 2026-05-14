@@ -22,7 +22,7 @@ captures/
 *.apk
 *.aab
 google-services.json
-
+.claude/
 # ── Docker ────────────────────────────────────────
 mosquitto/config/passwd
 Server Side/mosquitto/config/passwd

@@ -148,22 +148,46 @@ services:
     networks:
       - wattwise-network
 
+  # ── Bootstrap Aggregator (one-shot) ──────────────────────
+  # Scans all existing energy_readings on every `compose up` and rebuilds
+  # hourly_summary / daily_summary / home_daily_totals / energy_rankings
+  # so the admin dashboard shows historical charts immediately without
+  # waiting for the scheduled cron jobs to fire.
+  bootstrap-aggregator:
+    build:
+      context: ./Server Side/backend
+      dockerfile: Dockerfile
+    container_name: wattwise-bootstrap-aggregator
+    restart: "no"
+    env_file:
+      - ./Server Side/.env
+    working_dir: /app
+    command: python bootstrap_aggregator.py
+    depends_on:
+      backend:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+    networks:
+      - wattwise-network
+
   # ── Dummy Data Sender ── uncomment for local testing ─────────
-  # dummy-data-sender:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.dummy
-  #   container_name: wattwise-dummy-sender
-  #   restart: unless-stopped
-  #   env_file:
-  #     - ./Server Side/.env
-  #   depends_on:
-  #     backend:
-  #       condition: service_healthy
-  #     db-seed:
-  #       condition: service_completed_successfully
-  #   networks:
-  #     - wattwise-network
+  dummy-data-sender:
+    build:
+      context: .
+      dockerfile: Dockerfile.dummy
+    container_name: wattwise-dummy-sender
+    restart: unless-stopped
+    env_file:
+      - ./Server Side/.env
+    command: ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--interval", "5", "--backfill-days", "2", "--csv", "participants.csv"]
+    depends_on:
+      backend:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+    networks:
+      - wattwise-network
 
   # ── FastAPI Backend ──────────────────────────────────────
   backend:

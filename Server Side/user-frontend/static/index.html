@@ -371,6 +371,20 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
 
 <!-- ── HOME ──────────────────────────────────────────────── -->
 <section id="s-home" class="active">
+  <!-- Smart Use Now ribbon -->
+  <div class="suse-ribbon card" id="smart-use-ribbon" style="margin-bottom:14px;padding:14px 18px;display:none">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="font-size:22px">⚡</div>
+      <div style="flex:1;min-width:200px">
+        <div class="card-title" style="margin:0 0 2px">Smart Use Now</div>
+        <div id="suse-summary" style="font-size:.78rem;color:var(--mu)">Checking conditions…</div>
+      </div>
+      <div id="suse-pills" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      <button class="btn btn-outline btn-sm" id="suse-refresh" title="Refresh advisor">↻</button>
+    </div>
+    <div id="suse-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:12px"></div>
+  </div>
+
   <!-- KPI Grid -->
   <div class="kpi-grid">
     <div class="kpi kpi-g">
@@ -544,6 +558,23 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
 
 <!-- ── GOALS ─────────────────────────────────────────────── -->
 <section id="s-goals">
+  <!-- Streak summary (auto-loaded) -->
+  <div class="card" id="goal-streak-card" style="display:none">
+    <div class="card-hdr">
+      <span class="card-title">🎯 Your Goal Streak</span>
+      <select id="goal-streak-window" class="select-sm" style="background:var(--surf2);color:var(--t2);border:1px solid var(--bd);border-radius:6px;padding:4px 10px;font-size:.78rem">
+        <option value="14">Last 14 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+    <div id="goal-streak-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px"></div>
+    <div style="margin-top:14px">
+      <div class="card-title" style="font-size:.85rem;margin-bottom:6px">Daily progress</div>
+      <div class="chart-wrap" style="height:140px"><canvas id="goal-streak-chart"></canvas></div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-hdr"><span class="card-title">Set New Goal</span></div>
     <div class="form-row">
@@ -965,7 +996,64 @@ async function loadHome() {
   loadAlertPreview();
   loadHomeRankSnippet();
   loadCommunityBenchmarkPreview();
+  loadSmartUseNow();
 }
+
+// ── SMART USE NOW (batch advisor ribbon) ──────────────────────
+async function loadSmartUseNow() {
+  const ribbon = document.getElementById('smart-use-ribbon');
+  if (!ribbon) return;
+  try {
+    const data = await apiFetch('/smart-notifications/check-all');
+    ribbon.style.display = 'block';
+    const counts = data.counts || { ok: 0, review: 0, delay: 0 };
+    const peak = data.is_peak_time;
+
+    // Pills
+    document.getElementById('suse-pills').innerHTML = `
+      <span class="pill pill-g" title="Good to use now">✅ ${counts.ok} ready</span>
+      <span class="pill" style="background:rgba(245,158,11,.18);color:var(--amber)">💡 ${counts.review} review</span>
+      <span class="pill pill-r">⏸ ${counts.delay} delay</span>
+    `;
+
+    const summary = peak
+      ? `⚡ Peak tariff active at ${data.current_tariff_pence_per_kwh}p/kWh — high-energy appliances flagged for delay`
+      : `Off-peak at ${data.current_tariff_pence_per_kwh}p/kWh — good time to run high-energy appliances`;
+    document.getElementById('suse-summary').textContent = summary;
+
+    // Cards — show only "review" + "delay" verdicts (so the panel is actionable)
+    const actionable = (data.devices || []).filter(d => d.verdict !== 'ok');
+    const cardsEl = document.getElementById('suse-cards');
+    if (!actionable.length) {
+      cardsEl.innerHTML = '<div class="empty" style="padding:8px;font-size:.78rem">All your devices are ok to use right now ✅</div>';
+      return;
+    }
+    cardsEl.innerHTML = actionable.slice(0, 6).map(d => {
+      const colour = d.verdict === 'delay' ? 'var(--red)'
+                  : d.verdict === 'review' ? 'var(--amber)'
+                  : 'var(--green)';
+      const label = d.verdict === 'delay' ? '⏸ Delay'
+                  : d.verdict === 'review' ? '💡 Review' : '✅ OK';
+      const topAlert = (d.alerts && d.alerts[0]) ? d.alerts[0].message : d.verdict_text;
+      return `
+        <div class="card" style="padding:10px 12px;border-left:3px solid ${colour};margin:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-weight:600;font-size:.85rem">${iconFor(d.appliance_key)} ${san(d.device_name)}</div>
+            <div style="font-size:.7rem;color:${colour};font-weight:600">${label}</div>
+          </div>
+          <div style="font-size:.72rem;color:var(--mu);line-height:1.4">${san(topAlert)}</div>
+          <div style="display:flex;justify-content:space-between;font-size:.68rem;color:var(--mu);margin-top:6px">
+            <span>Score: ${(d.efficiency_score || 0).toFixed(0)}</span>
+            <span>~£${(d.estimated_cost_this_use_gbp || 0).toFixed(3)}/use</span>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) { console.warn('Smart Use:', e.message); }
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'suse-refresh') loadSmartUseNow();
+});
 
 function buildBillPrediction(data, avgDailyCost) {
   const now = new Date();
@@ -1177,15 +1265,276 @@ async function loadDevices() {
     const el = document.getElementById('device-list');
     if (!devs?.length) { el.innerHTML = '<div class="empty">No devices yet. Add one below.</div>'; return; }
     el.innerHTML = devs.map(d => `
-      <div class="device-row">
+      <div class="device-row" style="cursor:pointer" onclick="toggleDeviceInsights(${d.id}, this)">
         <div class="device-icon" style="background:rgba(22,163,74,.15);color:var(--green)">${iconFor(d.appliance_key)}</div>
         <div style="flex:1">
           <div class="device-name">${san(d.name)}</div>
           <div class="device-loc">${san(d.location || '')} · <code style="font-size:.68rem;color:var(--mu)">${san(d.entity_id)}</code></div>
         </div>
         <span class="pill pill-g">${san(d.appliance_key)}</span>
-      </div>`).join('');
+        <span style="margin-left:8px;color:var(--mu);font-size:.7rem" id="dev-expand-${d.id}">▾</span>
+      </div>
+      <div class="device-insights" id="dev-insights-${d.id}" style="display:none;padding:14px 18px;background:var(--surf2);border-top:1px solid var(--bd)"></div>
+    `).join('');
   } catch (e) { toast('Devices failed: ' + e.message, 'error'); }
+}
+
+// ── Per-device deep dive (hourly profile + standby + live wattage) ─────
+async function toggleDeviceInsights(deviceId, rowEl) {
+  const panel = document.getElementById('dev-insights-' + deviceId);
+  const caret = document.getElementById('dev-expand-' + deviceId);
+  if (!panel) return;
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    caret.textContent = '▾';
+    stopLiveWatts(deviceId);
+    return;
+  }
+  panel.style.display = 'block';
+  caret.textContent = '▴';
+  panel.innerHTML = '<div class="empty" style="padding:8px">Loading insights…</div>';
+
+  try {
+    const [profile, standby] = await Promise.all([
+      apiFetch('/readings/' + deviceId + '/hourly-profile?days=14').catch(() => null),
+      apiFetch('/readings/' + deviceId + '/standby?days=14').catch(() => null),
+    ]);
+
+    if (!profile && !standby) {
+      panel.innerHTML = '<div class="empty" style="padding:8px">No data yet for this device</div>';
+      return;
+    }
+
+    const canvasId = 'profile-canvas-' + deviceId;
+    panel.innerHTML = `
+      <div style="background:rgba(255,255,255,0.04);padding:12px 14px;border-radius:8px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+        <div style="flex:0 0 auto">
+          <div style="font-size:.7rem;color:var(--mu);text-transform:uppercase;letter-spacing:.5px">Live wattage</div>
+          <div id="live-watts-${deviceId}" style="font-size:1.5rem;font-weight:700;color:var(--mu)">— W</div>
+          <div id="live-watts-sub-${deviceId}" style="font-size:.68rem;color:var(--mu);margin-top:2px">awaiting data…</div>
+        </div>
+        <div style="flex:1;height:42px"><canvas id="live-watts-spark-${deviceId}"></canvas></div>
+      </div>
+      <div class="grid2" style="gap:14px">
+        <div>
+          <div class="card-title" style="margin-bottom:8px">⏰ Hourly Profile (14d avg)</div>
+          ${profile ? `
+            <div style="font-size:.75rem;color:var(--mu);margin-bottom:8px">
+              Avg ${profile.summary.avg_daily_kwh} kWh/day ·
+              ${profile.summary.peak_tariff_kwh_share_pct}% in peak tariff window
+              (${profile.summary.tariff_peak_window})
+            </div>
+            <div class="chart-wrap" style="height:180px"><canvas id="${canvasId}"></canvas></div>
+            <div style="font-size:.72rem;color:var(--mu);margin-top:6px">
+              Personal peak hours: ${(profile.summary.personal_peak_hours || []).map(h => `${String(h).padStart(2,'0')}:00`).join(', ') || '—'}
+            </div>
+          ` : '<div class="empty" style="padding:8px">No hourly data</div>'}
+        </div>
+        <div>
+          <div class="card-title" style="margin-bottom:8px">🔌 Standby Drain (14d)</div>
+          ${standby ? renderStandbyCard(standby) : '<div class="empty" style="padding:8px">No standby data</div>'}
+        </div>
+      </div>
+    `;
+
+    // Kick off live wattage polling (3-second interval)
+    startLiveWatts(deviceId);
+
+    if (profile) {
+      const ctx = document.getElementById(canvasId);
+      if (ctx) {
+        const colours = profile.profile.map(p =>
+          p.is_personal_peak ? '#8b5cf6'
+          : p.is_peak_tariff ? '#ef4444'
+          : 'rgba(22,163,74,.7)'
+        );
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: profile.profile.map(p => p.label),
+            datasets: [{
+              label: 'Avg kWh',
+              data: profile.profile.map(p => p.avg_kwh),
+              backgroundColor: colours,
+              borderRadius: 3,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${ctx.parsed.y.toFixed(4)} kWh`,
+                  afterLabel: (ctx) => {
+                    const p = profile.profile[ctx.dataIndex];
+                    const tags = [];
+                    if (p.is_peak_tariff) tags.push('⚡ peak tariff');
+                    if (p.is_personal_peak) tags.push('⭐ personal peak');
+                    return tags.join(', ');
+                  },
+                },
+              },
+            },
+            scales: {
+              x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxRotation: 0 }, grid: { display: false } },
+              y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+            },
+          },
+        });
+      }
+    }
+  } catch (e) {
+    panel.innerHTML = `<div class="empty" style="padding:8px">Error: ${e.message}</div>`;
+  }
+}
+
+function renderStandbyCard(s) {
+  const colour = s.severity === 'critical' ? 'var(--red)'
+              : s.severity === 'warning'  ? 'var(--amber)' : 'var(--green)';
+  const icon = s.severity === 'critical' ? '🚨'
+             : s.severity === 'warning'  ? '⚠️' : '✅';
+  return `
+    <div style="border-left:3px solid ${colour};padding-left:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-weight:600;font-size:1.1rem">${icon} ${(s.standby_kwh || 0).toFixed(3)} kWh</span>
+        <span style="font-size:.72rem;color:var(--mu)">${(s.standby_share_pct || 0).toFixed(1)}% of total</span>
+      </div>
+      <div style="font-size:.75rem;color:var(--mu);line-height:1.5">
+        Avg <strong style="color:var(--t2)">${(s.avg_daily_standby_kwh || 0).toFixed(3)} kWh/day</strong> in standby<br>
+        Annualised: <strong style="color:${colour}">${(s.annualised_standby_kwh || 0).toFixed(1)} kWh / £${(s.annualised_standby_cost_gbp || 0).toFixed(2)}</strong>
+      </div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
+        ${san(s.advice || '')}
+      </div>
+    </div>
+  `;
+}
+
+// ── Goal Streak ───────────────────────────────────────────────
+async function loadGoalStreak() {
+  const card = document.getElementById('goal-streak-card');
+  if (!card) return;
+  const win = parseInt(document.getElementById('goal-streak-window')?.value || '30', 10);
+  try {
+    const data = await apiFetch('/goals/streak/summary?days=' + win);
+    if (!data || !data.has_active_goal) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = 'block';
+
+    const tiles = [
+      ['🔥 Active streak', data.active_streak + ' days', 'var(--green)'],
+      ['🏆 Longest streak', data.longest_streak + ' days', 'var(--purple)'],
+      ['✓ Days under', data.days_under, 'var(--green)'],
+      ['✗ Days over',  data.days_over,  'var(--red)'],
+      ['7-day avg', (data.rolling_avg_kwh || 0).toFixed(2) + ' kWh', 'var(--blue)'],
+      ['🎯 Target', (data.target_kwh || 0).toFixed(2) + ' kWh/day', 'var(--mu)'],
+    ];
+    document.getElementById('goal-streak-summary').innerHTML = tiles.map(([label, val, c]) => `
+      <div style="background:rgba(255,255,255,0.03);padding:10px 12px;border-radius:8px;border-left:3px solid ${c}">
+        <div style="font-size:.7rem;color:var(--mu);text-transform:uppercase;letter-spacing:.5px">${label}</div>
+        <div style="font-size:1.1rem;font-weight:700;color:${c};margin-top:2px">${val}</div>
+      </div>
+    `).join('');
+
+    const ctx = document.getElementById('goal-streak-chart');
+    if (!ctx) return;
+    destroyChart('goal-streak-chart');
+    const labels = data.history.map(h => h.date.slice(5));
+    const values = data.history.map(h => h.kwh);
+    const target = data.target_kwh;
+    const colours = data.history.map(h =>
+      h.met === true  ? 'rgba(22,163,74,0.7)' :
+      h.met === false ? 'rgba(239,68,68,0.7)' :
+                        'rgba(148,163,184,0.4)'
+    );
+    _charts['goal-streak-chart'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'kWh', data: values, backgroundColor: colours, borderRadius: 3 },
+          {
+            type: 'line', label: 'Target', data: labels.map(() => target),
+            borderColor: 'var(--purple-d)', borderDash: [6, 4], borderWidth: 2,
+            pointRadius: 0, fill: false,
+          },
+        ],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: { legend: { labels: { color: 'var(--t2)', font: { size: 10 } } } },
+        scales: {
+          x: { ticks: { color: 'var(--mu)', font: { size: 9 }, maxRotation: 0 }, grid: { display: false } },
+          y: { ticks: { color: 'var(--mu)', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        },
+      },
+    });
+  } catch (e) {
+    console.warn('Goal streak load:', e.message);
+    card.style.display = 'none';
+  }
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'goal-streak-window') loadGoalStreak();
+});
+
+// ── Live Wattage Gauge (per-device, polling) ──────────────────
+const _liveWattTimers = {};
+
+function startLiveWatts(deviceId) {
+  if (_liveWattTimers[deviceId]) return;
+  const tick = async () => {
+    try {
+      const data = await apiFetch(`/readings/${deviceId}/live?points=20`);
+      const gauge = document.getElementById(`live-watts-${deviceId}`);
+      const sub = document.getElementById(`live-watts-sub-${deviceId}`);
+      const sparkCanvas = document.getElementById(`live-watts-spark-${deviceId}`);
+      if (!gauge) { stopLiveWatts(deviceId); return; }
+      const w = data.current_watts || 0;
+      gauge.textContent = w.toFixed(1) + ' W';
+      gauge.style.color = w > 1500 ? 'var(--red)' : w > 500 ? 'var(--amber)' : w > 50 ? 'var(--green)' : 'var(--mu)';
+      if (sub) sub.textContent = `peak ${data.peak_watts_window.toFixed(0)} W · avg ${data.avg_watts_window.toFixed(0)} W · last seen ${new Date(data.last_seen).toLocaleTimeString('en-GB')}`;
+
+      if (sparkCanvas && data.points?.length) {
+        const chartId = `live-watts-spark-${deviceId}`;
+        destroyChart(chartId);
+        _charts[chartId] = new Chart(sparkCanvas, {
+          type: 'line',
+          data: {
+            labels: data.points.map(p => ''),
+            datasets: [{
+              data: data.points.map(p => p.w),
+              borderColor: w > 500 ? '#f59e0b' : '#16a34a',
+              backgroundColor: w > 500 ? 'rgba(245,158,11,0.15)' : 'rgba(22,163,74,0.15)',
+              fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: { x: { display: false }, y: { display: false, beginAtZero: true } },
+          },
+        });
+      }
+    } catch (e) {
+      console.warn('Live watts:', e.message);
+    }
+  };
+  tick();
+  _liveWattTimers[deviceId] = setInterval(tick, 3000);
+}
+
+function stopLiveWatts(deviceId) {
+  if (_liveWattTimers[deviceId]) {
+    clearInterval(_liveWattTimers[deviceId]);
+    delete _liveWattTimers[deviceId];
+  }
+  destroyChart(`live-watts-spark-${deviceId}`);
 }
 
 function showAddDevice() { document.getElementById('add-device-form').style.display = 'block'; }
@@ -1266,6 +1615,7 @@ async function recordDecision(notifId, type) {
 
 // ── GOALS ─────────────────────────────────────────────────────
 async function loadGoals() {
+  loadGoalStreak();
   try {
     const goals = await apiFetch('/goals/');
     const el = document.getElementById('goals-list');

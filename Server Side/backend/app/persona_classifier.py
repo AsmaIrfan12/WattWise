@@ -1,18 +1,32 @@
 """
 WattWise Persona Classifier
-=============================
-Automatically classifies users into energy behaviour personas
-based on their efficiency scores, goal adherence, and decision responses.
+============================
+Differentiates each home (one home per user) into one of five behavioural
+personas based on energy usage relative to the rest of the community.
 
 Personas:
-  1. Eco Champion    — Top performers: high efficiency, high adherence
-  2. Active Improver — Improving trend, moderate adherence
-  3. Steady User     — Consistent average-range usage
-  4. High Consumer   — Above-average consumption, declining efficiency
-  5. Disengaged      — Low interaction, poor adherence or no data
+  1. Eco Champion    — top-quintile combined performer
+  2. Active Improver — above-median performer with an improving trend
+  3. Steady User     — mid-range community member
+  4. High Consumer   — bottom-quintile performer (most consumption per occupant)
+  5. Disengaged      — insufficient data or no recent platform interaction
 
-Called weekly by scheduler (Sunday 02:00 UTC).
-Admin can override persona classification manually via the admin API.
+Strategy
+--------
+Each user's "combined score" is a weighted blend of:
+  - efficiency_score       (50%)  — kWh/occupant signal from EnergyRanking
+  - goal_adherence_score   (30%)  — goal_kwh / actual_kwh
+  - decision_response_score(20%)  — average effectiveness of accepted decisions
+
+The score is averaged over the most recent 30 days (or however many ranking
+rows exist). Each user is then placed at a percentile within the cohort, and
+the persona is assigned based on percentile band — this guarantees a sensible
+distribution regardless of the absolute scale of the synthetic data.
+
+Disengaged check runs first: <2 ranking rows OR no readings in 14 days.
+
+Called weekly by scheduler (Sunday 02:00 UTC) and on every `docker compose up`
+by the bootstrap aggregator. Admins can override classification via the API.
 """
 
 import logging
@@ -21,7 +35,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User, EnergyRanking, UserDecision, Persona
+from app.models import (
+    User, EnergyRanking, UserDecision, Persona,
+    Home, EnergyReading, Device,
+)
 
 logger = logging.getLogger("persona_classifier")
 
@@ -30,146 +47,214 @@ DEFAULT_PERSONAS = [
     {
         "name": "Eco Champion",
         "description": "Top performers with high efficiency scores and excellent goal adherence. These users consistently use energy wisely.",
-        "criteria": {"min_efficiency": 75, "min_adherence": 80, "min_decision_rate": 60},
+        "criteria": {"percentile_min": 80},
     },
     {
         "name": "Active Improver",
         "description": "Users showing a positive energy reduction trend. Engaged with the platform and working to improve their efficiency.",
-        "criteria": {"min_efficiency": 55, "min_adherence": 50, "min_decision_rate": 40, "improving_trend": True},
+        "criteria": {"percentile_min": 55, "percentile_max": 79, "improving_trend": True},
     },
     {
         "name": "Steady User",
         "description": "Consistent users with average community performance. Neither high nor low consumers.",
-        "criteria": {"min_efficiency": 40, "max_efficiency": 74, "min_adherence": 30, "max_adherence": 79},
+        "criteria": {"percentile_min": 25, "percentile_max": 79},
     },
     {
         "name": "High Consumer",
         "description": "Users with above-average energy consumption. May benefit from targeted interventions and personalised recommendations.",
-        "criteria": {"max_efficiency": 40, "max_adherence": 30},
+        "criteria": {"percentile_max": 24},
     },
     {
         "name": "Disengaged",
         "description": "Users with minimal platform interaction, very low goal adherence, or no recent data. May need re-engagement outreach.",
-        "criteria": {"max_decision_rate": 10, "max_adherence": 10},
+        "criteria": {"min_ranking_days": 2, "max_inactive_days": 14},
     },
 ]
+
+
+# Weights used by the combined score
+WEIGHT_EFFICIENCY = 0.50
+WEIGHT_ADHERENCE = 0.30
+WEIGHT_DECISION = 0.20
+
+# Disengagement gates
+MIN_RANKING_DAYS = 2
+INACTIVE_DAYS_THRESHOLD = 14
+
+# Percentile bands
+PCT_ECO_CHAMPION = 80
+PCT_ACTIVE_IMPROVER_LOW = 55
+PCT_HIGH_CONSUMER_MAX = 24
 
 
 # ── Persona Seeder ─────────────────────────────────────────────
 
 async def seed_default_personas(db: AsyncSession) -> None:
-    """Insert default personas if they don't exist yet."""
+    """Insert default personas if they don't exist yet; refresh criteria."""
     for pdef in DEFAULT_PERSONAS:
         existing = await db.execute(select(Persona).where(Persona.name == pdef["name"]))
-        if not existing.scalar_one_or_none():
-            persona = Persona(
+        persona = existing.scalar_one_or_none()
+        if persona is None:
+            db.add(Persona(
                 name=pdef["name"],
                 description=pdef["description"],
                 criteria=pdef["criteria"],
-            )
-            db.add(persona)
+            ))
+        else:
+            # Keep description + criteria in sync with the latest definition
+            persona.description = pdef["description"]
+            persona.criteria = pdef["criteria"]
     await db.commit()
-    logger.info("Default personas seeded")
+    logger.info("Default personas seeded / refreshed")
 
 
 # ── Classification Engine ──────────────────────────────────────
 
 async def classify_all_users(db: AsyncSession) -> dict:
     """
-    Classify all non-admin users into personas based on 30-day history.
-    Returns a summary: {persona_name: count}.
+    Classify all non-admin users into personas.
+
+    Strategy:
+      1. Compute combined score for every user from the last 30 days of
+         EnergyRanking rows.
+      2. Mark users with insufficient data (< MIN_RANKING_DAYS rows or no
+         recent readings) as Disengaged.
+      3. Rank the remaining users by combined score and assign personas
+         based on percentile bands (Eco Champion = top 20%, etc.).
+
+    Returns a summary dict {persona_name: count_changed}.
     """
     logger.info("Starting persona classification run...")
 
-    # Load all personas
     personas_result = await db.execute(select(Persona))
     personas = {p.name: p for p in personas_result.scalars().all()}
-
     if not personas:
-        logger.warning("No personas found — seed first")
+        logger.warning("No personas seeded — run seed_default_personas first")
         return {}
 
-    # Load all non-admin users who haven't been manually locked
-    users_result = await db.execute(
-        select(User).where(User.is_admin == False)
-    )
+    cutoff_30d = (datetime.utcnow() - timedelta(days=30)).date()
+    inactive_cutoff = datetime.utcnow() - timedelta(days=INACTIVE_DAYS_THRESHOLD)
+
+    # ── Step 1: gather all users + their stats ───────────────
+    users_result = await db.execute(select(User).where(User.is_admin.is_(False)))
     users = users_result.scalars().all()
 
-    summary: dict[str, int] = {}
-    cutoff = (datetime.utcnow() - timedelta(days=30)).date()
+    user_stats: list[dict] = []
+    disengaged_user_ids: set[int] = set()
 
     for user in users:
-        try:
-            persona_name = await _classify_user(db, user, cutoff)
-            persona = personas.get(persona_name)
-            if persona and user.persona_id != persona.id:
-                user.persona_id = persona.id
-                summary[persona_name] = summary.get(persona_name, 0) + 1
-        except Exception as e:
-            logger.error("Persona classification failed for user %s: %s", user.id, e)
+        # Pull ranking metrics (30-day average)
+        rk = await db.execute(
+            select(
+                func.avg(EnergyRanking.efficiency_score).label("avg_eff"),
+                func.avg(EnergyRanking.goal_adherence_score).label("avg_adh"),
+                func.avg(EnergyRanking.decision_response_score).label("avg_dec"),
+                func.count(EnergyRanking.id).label("days"),
+            ).where(
+                EnergyRanking.user_id == user.id,
+                EnergyRanking.period_type == "DAILY",
+                EnergyRanking.period_start >= cutoff_30d,
+            )
+        )
+        rk_row = rk.one()
+        days = int(rk_row.days or 0)
+
+        # Recent activity check — any reading from this user's homes in the last 14 days?
+        last_reading = await db.execute(
+            select(func.max(EnergyReading.recorded_at))
+            .join(Device, EnergyReading.device_id == Device.id)
+            .join(Home, Device.home_id == Home.id)
+            .where(Home.user_id == user.id)
+        )
+        last_seen = last_reading.scalar_one_or_none()
+        is_inactive = (last_seen is None) or (last_seen < inactive_cutoff)
+
+        if days < MIN_RANKING_DAYS or is_inactive:
+            disengaged_user_ids.add(user.id)
+            continue
+
+        avg_eff = float(rk_row.avg_eff or 0)
+        avg_adh = float(rk_row.avg_adh or 0)
+        avg_dec = float(rk_row.avg_dec or 0)
+
+        combined = (
+            avg_eff * WEIGHT_EFFICIENCY
+            + avg_adh * WEIGHT_ADHERENCE
+            + avg_dec * WEIGHT_DECISION
+        )
+
+        improving = await _check_improving_trend(db, user.id)
+
+        user_stats.append({
+            "user_id": user.id,
+            "user": user,
+            "combined": combined,
+            "improving": improving,
+            "days": days,
+        })
+
+    # ── Step 2: percentile ranking among engaged users ───────
+    if user_stats:
+        user_stats.sort(key=lambda u: u["combined"])
+        n = len(user_stats)
+        for i, entry in enumerate(user_stats):
+            # Percentile: 0 = worst, 100 = best
+            entry["percentile"] = (i / max(n - 1, 1)) * 100.0
+
+    # ── Step 3: assignment ───────────────────────────────────
+    summary: dict[str, int] = {}
+
+    # First, every disengaged user
+    disengaged_persona = personas.get("Disengaged")
+    if disengaged_persona:
+        for u in users:
+            if u.id in disengaged_user_ids and u.persona_id != disengaged_persona.id:
+                u.persona_id = disengaged_persona.id
+                summary["Disengaged"] = summary.get("Disengaged", 0) + 1
+
+    # Then engaged users by percentile
+    for entry in user_stats:
+        u = entry["user"]
+        pct = entry["percentile"]
+        improving = entry["improving"]
+
+        if pct >= PCT_ECO_CHAMPION:
+            target_name = "Eco Champion"
+        elif pct >= PCT_ACTIVE_IMPROVER_LOW and improving:
+            target_name = "Active Improver"
+        elif pct <= PCT_HIGH_CONSUMER_MAX:
+            target_name = "High Consumer"
+        else:
+            target_name = "Steady User"
+
+        target = personas.get(target_name)
+        if target and u.persona_id != target.id:
+            u.persona_id = target.id
+            summary[target_name] = summary.get(target_name, 0) + 1
 
     await db.commit()
-    logger.info("Persona classification complete: %s", summary)
-    return summary
 
-
-async def _classify_user(db: AsyncSession, user: User, since_date) -> str:
-    """Compute metrics for a user and return their persona name."""
-
-    # 1. Get recent ranking data (30-day average)
-    ranking_result = await db.execute(
-        select(
-            func.avg(EnergyRanking.efficiency_score).label("avg_eff"),
-            func.avg(EnergyRanking.goal_adherence_score).label("avg_adherence"),
-            func.avg(EnergyRanking.decision_response_score).label("avg_decision"),
-            func.count(EnergyRanking.id).label("ranking_days"),
-        )
-        .where(
-            EnergyRanking.user_id == user.id,
-            EnergyRanking.period_start >= since_date,
-        )
+    # Always log the final population per persona, even if nothing changed,
+    # so operators can see the live distribution.
+    final = await _persona_population(db)
+    logger.info(
+        "Persona classification complete — changes=%s, current population=%s",
+        summary, final,
     )
-    row = ranking_result.one()
+    return {"changed": summary, "population": final}
 
-    avg_eff = float(row.avg_eff or 50.0)
-    avg_adherence = float(row.avg_adherence or 50.0)
-    avg_decision = float(row.avg_decision or 50.0)
-    ranking_days = int(row.ranking_days or 0)
 
-    # 2. Check if user has any decisions recorded
-    decision_result = await db.execute(
-        select(func.count(UserDecision.id)).where(
-            UserDecision.user_id == user.id,
-            UserDecision.created_at >= datetime.utcnow() - timedelta(days=30),
-        )
+async def _persona_population(db: AsyncSession) -> dict:
+    rows = await db.execute(
+        select(Persona.name, func.count(User.id))
+        .outerjoin(User, User.persona_id == Persona.id)
+        .group_by(Persona.id, Persona.name)
     )
-    decision_count = int(decision_result.scalar() or 0)
-
-    # 3. Check improving trend (compare last 7 days vs previous 7 days)
-    trend_improving = await _check_improving_trend(db, user.id)
-
-    # 4. Apply classification rules (ordered by priority)
-    if ranking_days < 3:
-        return "Disengaged"  # Not enough data
-
-    if avg_decision <= 10 and avg_adherence <= 10:
-        return "Disengaged"
-
-    if avg_eff >= 75 and avg_adherence >= 80:
-        return "Eco Champion"
-
-    if trend_improving and avg_eff >= 55 and avg_adherence >= 50:
-        return "Active Improver"
-
-    if avg_eff <= 40 and avg_adherence <= 30:
-        return "High Consumer"
-
-    # Default: Steady User
-    return "Steady User"
+    return {name: int(count) for name, count in rows.all()}
 
 
 async def _check_improving_trend(db: AsyncSession, user_id: int) -> bool:
-    """True if average efficiency improved from week 2→1 (last 14 days)."""
+    """True if this week's average efficiency is at least 2pts above last week's."""
     now = datetime.utcnow().date()
     week1_start = now - timedelta(days=7)
     week2_start = now - timedelta(days=14)
@@ -179,6 +264,7 @@ async def _check_improving_trend(db: AsyncSession, user_id: int) -> bool:
             select(func.avg(EnergyRanking.efficiency_score))
             .where(
                 EnergyRanking.user_id == user_id,
+                EnergyRanking.period_type == "DAILY",
                 EnergyRanking.period_start >= start,
                 EnergyRanking.period_start < end,
             )
@@ -187,5 +273,4 @@ async def _check_improving_trend(db: AsyncSession, user_id: int) -> bool:
 
     week1_avg = await avg_eff(week1_start, now)
     week2_avg = await avg_eff(week2_start, week1_start)
-
-    return week1_avg > week2_avg + 2.0  # At least 2% improvement to count
+    return week1_avg > week2_avg + 2.0

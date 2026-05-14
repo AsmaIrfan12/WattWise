@@ -1,14 +1,14 @@
 """WattWise — Notifications Router."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from sqlalchemy import select, func, update as sql_update
+from sqlalchemy import select, func, update as sql_update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Notification, UserInteractionLog
+from app.models import Notification, UserInteractionLog, Device
 from app.schemas import NotificationResponse, NotificationStatsResponse
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
@@ -68,6 +68,93 @@ async def get_stats(request: Request, db: AsyncSession = Depends(get_db)):
         total=total, unread=unread, critical=critical,
         today=today_count, requires_action=requires_action
     )
+
+
+@router.get("/stats/breakdown")
+async def get_stats_breakdown(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Detailed breakdown of this user's notifications:
+      - by notification_type
+      - by severity
+      - by appliance (resolved via device_id)
+      - by time bucket: last 24h, last 7d, last 30d, all-time
+    Ported from old getNotificationStats endpoint with richer dimensions.
+    """
+    user_id = _get_user_id(request)
+    now = datetime.utcnow()
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+    last_30d = now - timedelta(days=30)
+
+    # By notification_type
+    by_type_q = await db.execute(
+        select(Notification.notification_type, func.count(Notification.id))
+        .where(Notification.user_id == user_id)
+        .group_by(Notification.notification_type)
+        .order_by(func.count(Notification.id).desc())
+    )
+    by_type = [{"type": t or "unknown", "count": int(c)} for t, c in by_type_q.all()]
+
+    # By severity
+    by_severity_q = await db.execute(
+        select(Notification.severity, func.count(Notification.id))
+        .where(Notification.user_id == user_id)
+        .group_by(Notification.severity)
+    )
+    by_severity = [{"severity": s or "INFO", "count": int(c)} for s, c in by_severity_q.all()]
+
+    # By appliance (joined via Device)
+    by_appliance_q = await db.execute(
+        select(Device.appliance_key, func.count(Notification.id))
+        .join(Notification, Notification.device_id == Device.id)
+        .where(Notification.user_id == user_id, Device.appliance_key.is_not(None))
+        .group_by(Device.appliance_key)
+        .order_by(func.count(Notification.id).desc())
+    )
+    by_appliance = [{"appliance": a, "count": int(c)} for a, c in by_appliance_q.all()]
+
+    # By time bucket
+    async def count_since(ts):
+        q = select(func.count(Notification.id)).where(
+            Notification.user_id == user_id,
+            Notification.created_at >= ts,
+        )
+        return int((await db.execute(q)).scalar() or 0)
+
+    async def count_total():
+        q = select(func.count(Notification.id)).where(Notification.user_id == user_id)
+        return int((await db.execute(q)).scalar() or 0)
+
+    by_period = {
+        "last_24h": await count_since(last_24h),
+        "last_7d": await count_since(last_7d),
+        "last_30d": await count_since(last_30d),
+        "all_time": await count_total(),
+    }
+
+    # Read/unread/dismissed split (handy for the bell-badge donut)
+    state_q = await db.execute(
+        select(
+            func.sum(case((Notification.is_read, 1), else_=0)).label("read"),
+            func.sum(case((Notification.is_read, 0), else_=1)).label("unread"),
+            func.sum(case((Notification.dismissed, 1), else_=0)).label("dismissed"),
+        ).where(Notification.user_id == user_id)
+    )
+    state_row = state_q.one()
+    state = {
+        "read": int(state_row.read or 0),
+        "unread": int(state_row.unread or 0),
+        "dismissed": int(state_row.dismissed or 0),
+    }
+
+    return {
+        "by_type": by_type,
+        "by_severity": by_severity,
+        "by_appliance": by_appliance,
+        "by_period": by_period,
+        "state": state,
+        "generated_at": now.isoformat(),
+    }
 
 
 @router.patch("/{notification_id}/read", response_model=NotificationResponse)

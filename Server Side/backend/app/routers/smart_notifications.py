@@ -446,3 +446,146 @@ async def trigger_smart_notifications(
         "sent_count": len(sent),
         "notifications": sent,
     }
+
+
+@router.get("/check-all")
+async def check_all_devices(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    home_id: Optional[int] = Query(default=None),
+    appliances: Optional[str] = Query(default=None, description="Comma-separated appliance keys"),
+):
+    """
+    Batch advisor — runs the "should I use this now?" engine across all of the
+    caller's devices in a single round trip. Returns one optimization payload
+    per device, sorted from "best to use right now" → "delay if possible".
+
+    Optional filters:
+      - home_id     restrict to a single home/RPi
+      - appliances  CSV of appliance_keys (e.g. "kettle,airfryer")
+
+    Ported batched form of the old checkDeviceBeforeUse — used by the
+    upcoming "Smart Use Now" widget in the user dashboard.
+    """
+    user_id = _get_user_id(request)
+
+    # Resolve devices for this user (optionally filtered)
+    homes_q = select(Home).where(Home.user_id == user_id, Home.is_active.is_(True))
+    if home_id is not None:
+        homes_q = homes_q.where(Home.id == home_id)
+    homes = (await db.execute(homes_q)).scalars().all()
+    if not homes:
+        return {"verdict_summary": "No homes configured", "devices": []}
+
+    home_ids = [h.id for h in homes]
+    home_by_id = {h.id: h for h in homes}
+
+    devices_q = select(Device).where(Device.home_id.in_(home_ids), Device.is_active.is_(True))
+    if appliances:
+        wanted = {a.strip().lower() for a in appliances.split(",") if a.strip()}
+        devices_q = devices_q.where(Device.appliance_key.in_(wanted))
+    devices = (await db.execute(devices_q)).scalars().all()
+    if not devices:
+        return {"verdict_summary": "No matching devices", "devices": []}
+
+    # Pre-fetch room env per home so we don't repeat InfluxDB calls per device
+    influx = _get_influx()
+    today = datetime.utcnow().date()
+    is_peak = settings.is_peak_time()
+
+    env_by_home: dict[int, dict] = {}
+    for h in homes:
+        env = {"temperature": 20.0, "humidity": 50.0, "pressure": 101.3}
+        try:
+            rooms = (await db.execute(select(Room).where(Room.home_id == h.id))).scalars().all()
+            if rooms:
+                base = rooms[0].entity_id or rooms[0].name.lower().replace(" ", "")
+                env = _fetch_env_conditions(influx, base)
+        except Exception:
+            pass
+        env_by_home[h.id] = env
+
+    results = []
+    for device in devices:
+        if not device.appliance_key:
+            continue
+
+        env = env_by_home.get(device.home_id, {"temperature": 20.0, "humidity": 50.0, "pressure": 101.3})
+
+        daily = (await db.execute(
+            select(DailySummary).where(
+                DailySummary.device_id == device.id,
+                DailySummary.day_date == today,
+            )
+        )).scalar_one_or_none()
+        usage_data = _build_usage_data_for_device(device, daily)
+
+        try:
+            opt = calculate_optimization(
+                appliance_key=device.appliance_key,
+                temperature=env["temperature"],
+                humidity=env["humidity"],
+                pressure=env["pressure"],
+                usage_data=usage_data,
+            )
+        except Exception as exc:
+            logger.warning("multi-check optimization failed for device %s: %s", device.id, exc)
+            continue
+
+        critical_or_warning = sum(
+            1 for a in opt.get("alerts", []) if a.get("priority") in ("critical", "warning")
+        )
+
+        # Verdict heuristic: peak-time + high-energy appliance = delay
+        is_high_energy = device.appliance_key in (
+            "dryer", "dishwasher", "washingmachine", "washing_machine", "airfryer", "cooker"
+        )
+        if is_peak and is_high_energy:
+            verdict = "delay"
+            verdict_text = "Peak tariff active — delay if possible"
+        elif critical_or_warning > 0:
+            verdict = "review"
+            verdict_text = "Optimisation suggestions available"
+        else:
+            verdict = "ok"
+            verdict_text = "Good time to use this device"
+
+        home = home_by_id.get(device.home_id)
+        results.append({
+            "device_id": device.id,
+            "device_name": device.name,
+            "appliance_key": device.appliance_key,
+            "home_id": device.home_id,
+            "home_name": home.home_name if home else None,
+            "location": device.location,
+            "verdict": verdict,
+            "verdict_text": verdict_text,
+            "alert_count": critical_or_warning,
+            "efficiency_score": opt.get("efficiency_score"),
+            "estimated_cost_this_use_gbp": round(
+                APPLIANCE_BASE_ENERGY.get(device.appliance_key, 0.5)
+                * settings.get_current_tariff(), 4
+            ),
+            "alerts": opt.get("alerts", []),
+            "recommendations": opt.get("recommendations", []),
+        })
+
+    # Sort: ok → review → delay
+    rank = {"ok": 0, "review": 1, "delay": 2}
+    results.sort(key=lambda r: (rank.get(r["verdict"], 3), -1 * (r["efficiency_score"] or 0)))
+
+    summary_counts = {"ok": 0, "review": 0, "delay": 0}
+    for r in results:
+        summary_counts[r["verdict"]] = summary_counts.get(r["verdict"], 0) + 1
+
+    return {
+        "is_peak_time": is_peak,
+        "current_tariff_pence_per_kwh": round(settings.get_current_tariff() * 100, 1),
+        "verdict_summary": (
+            f"{summary_counts['ok']} ready, "
+            f"{summary_counts['review']} review, "
+            f"{summary_counts['delay']} delay"
+        ),
+        "counts": summary_counts,
+        "devices": results,
+    }

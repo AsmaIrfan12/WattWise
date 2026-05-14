@@ -29,6 +29,12 @@ logger = logging.getLogger("mqtt_client")
 _mqtt_client: mqtt.Client | None = None
 _mqtt_connected: bool = False
 
+# ── $SYS broker stats cache ───────────────────────────────────
+# Mosquitto publishes broker telemetry on $SYS/broker/* topics. We subscribe
+# at startup and cache the latest value per topic so the admin panel can
+# query a snapshot without opening a fresh MQTT connection per request.
+_broker_stats: dict[str, dict] = {}
+
 # ── InfluxDB singleton ────────────────────────────────────────
 _influx_client = None
 
@@ -111,6 +117,11 @@ def on_connect(client, userdata, flags, rc):
         topic = f"{settings.MQTT_TOPIC_PREFIX}/+/devices/+/data"
         client.subscribe(topic, qos=1)
         logger.info("Subscribed to: %s", topic)
+
+        # Subscribe to broker telemetry so we can surface live stats in the admin panel.
+        # Mosquitto needs sys_interval > 0 (default 10s) for these to publish.
+        client.subscribe("$SYS/broker/#", qos=0)
+        logger.info("Subscribed to: $SYS/broker/# (broker telemetry)")
     else:
         logger.error("MQTT connection failed with code %s", rc)
 
@@ -123,6 +134,17 @@ def on_disconnect(client, userdata, rc):
 
 
 def on_message(client, userdata, msg):
+    """Process incoming MQTT messages — telemetry, broker stats, or other."""
+    # Route broker telemetry to the stats cache and bail out
+    if msg.topic.startswith("$SYS/broker/"):
+        try:
+            raw = msg.payload.decode("utf-8", errors="ignore").strip()
+            value = float(raw) if raw.replace(".", "", 1).replace("-", "", 1).isdigit() else raw
+            _broker_stats[msg.topic] = {"value": value, "ts": datetime.utcnow().isoformat()}
+        except Exception as exc:
+            logger.debug("Failed to cache broker stat %s: %s", msg.topic, exc)
+        return
+
     """Process incoming energy telemetry from smart plugs."""
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
@@ -307,3 +329,52 @@ def stop_mqtt():
 
 def is_mqtt_connected() -> bool:
     return _mqtt_connected
+
+
+def get_broker_stats_snapshot() -> dict:
+    """
+    Return a tidy snapshot of the most useful $SYS/broker/* metrics.
+
+    Mosquitto publishes these on a sys_interval (default 10s). The values are
+    populated by on_message and live in the _broker_stats module-level dict.
+    """
+    def _val(topic):
+        entry = _broker_stats.get(topic)
+        return entry["value"] if entry else None
+
+    def _ts(topic):
+        entry = _broker_stats.get(topic)
+        return entry["ts"] if entry else None
+
+    interesting = {
+        "uptime":              "$SYS/broker/uptime",
+        "version":             "$SYS/broker/version",
+        "clients_connected":   "$SYS/broker/clients/connected",
+        "clients_active":      "$SYS/broker/clients/active",
+        "clients_total":       "$SYS/broker/clients/total",
+        "clients_maximum":     "$SYS/broker/clients/maximum",
+        "messages_received":   "$SYS/broker/messages/received",
+        "messages_sent":       "$SYS/broker/messages/sent",
+        "messages_stored":     "$SYS/broker/messages/stored",
+        "retained_count":      "$SYS/broker/retained messages/count",
+        "subscriptions_count": "$SYS/broker/subscriptions/count",
+        "bytes_received":      "$SYS/broker/bytes/received",
+        "bytes_sent":          "$SYS/broker/bytes/sent",
+        "load_msg_in_1min":    "$SYS/broker/load/messages/received/1min",
+        "load_msg_out_1min":   "$SYS/broker/load/messages/sent/1min",
+        "load_publish_in_1min":  "$SYS/broker/load/publish/received/1min",
+        "load_publish_out_1min": "$SYS/broker/load/publish/sent/1min",
+    }
+
+    metrics = {k: _val(t) for k, t in interesting.items()}
+    last_update = max(
+        (entry["ts"] for entry in _broker_stats.values()),
+        default=None,
+    )
+
+    return {
+        "broker_connected": _mqtt_connected,
+        "topics_cached": len(_broker_stats),
+        "last_update": last_update,
+        "metrics": metrics,
+    }

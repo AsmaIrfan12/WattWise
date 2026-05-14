@@ -1,7 +1,8 @@
 """WattWise — Energy Goals Router."""
 
+from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,3 +150,137 @@ async def deactivate_goal(goal_id: int, request: Request, db: AsyncSession = Dep
         raise HTTPException(status_code=404, detail="Goal not found")
     goal.is_active = False
     await db.commit()
+
+
+@router.get("/streak/summary")
+async def get_goal_streak(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """
+    Streak + progress summary for the user's active daily home-level goal.
+
+    Returns:
+      - active_streak: consecutive days under goal (most-recent-first count)
+      - longest_streak: longest run in the window
+      - days_under / days_over / days_no_data
+      - history: per-day [{date, kwh, target_kwh, met, pct_of_target}]
+      - rolling_avg_kwh: 7-day rolling avg of kwh
+    """
+    user_id = _get_user_id(request)
+    today = date.today()
+    since = today - timedelta(days=days - 1)
+
+    # Active daily goal (home-wide, no device)
+    goal_q = await db.execute(
+        select(EnergyGoal).where(
+            EnergyGoal.user_id == user_id,
+            EnergyGoal.is_active.is_(True),
+            EnergyGoal.goal_type == "daily",
+            EnergyGoal.device_id.is_(None),
+        ).limit(1)
+    )
+    goal = goal_q.scalar_one_or_none()
+    target_kwh = float(goal.target_kwh) if goal else None
+
+    # Pull total daily kWh per day across the user's homes
+    home_ids_q = await db.execute(
+        select(Home.id).where(Home.user_id == user_id, Home.is_active.is_(True))
+    )
+    home_ids = [hid for (hid,) in home_ids_q.all()]
+    if not home_ids:
+        return {
+            "has_active_goal": goal is not None,
+            "target_kwh": target_kwh,
+            "window_days": days,
+            "history": [],
+            "active_streak": 0,
+            "longest_streak": 0,
+            "days_under": 0,
+            "days_over": 0,
+            "days_no_data": days,
+            "rolling_avg_kwh": 0.0,
+        }
+
+    daily_q = await db.execute(
+        select(
+            HomeDailyTotal.day_date,
+            func.sum(HomeDailyTotal.total_kwh).label("kwh"),
+        )
+        .where(
+            HomeDailyTotal.home_id.in_(home_ids),
+            HomeDailyTotal.day_date >= since,
+            HomeDailyTotal.day_date <= today,
+        )
+        .group_by(HomeDailyTotal.day_date)
+    )
+    by_day = {r.day_date: float(r.kwh or 0) for r in daily_q.all()}
+
+    history = []
+    days_under = 0
+    days_over = 0
+    days_no_data = 0
+    cur_date = since
+    while cur_date <= today:
+        kwh = by_day.get(cur_date)
+        if kwh is None:
+            history.append({
+                "date": cur_date.isoformat(),
+                "kwh": None,
+                "target_kwh": target_kwh,
+                "met": None,
+                "pct_of_target": None,
+            })
+            days_no_data += 1
+        else:
+            met = (target_kwh is not None and kwh <= target_kwh)
+            pct = (kwh / target_kwh * 100) if target_kwh and target_kwh > 0 else None
+            history.append({
+                "date": cur_date.isoformat(),
+                "kwh": round(kwh, 3),
+                "target_kwh": target_kwh,
+                "met": met,
+                "pct_of_target": round(pct, 1) if pct is not None else None,
+            })
+            if met:
+                days_under += 1
+            elif target_kwh is not None:
+                days_over += 1
+        cur_date += timedelta(days=1)
+
+    # Active streak: walk backwards from today while goal was met
+    active_streak = 0
+    if target_kwh is not None:
+        for entry in reversed(history):
+            if entry["met"] is True:
+                active_streak += 1
+            else:
+                break
+
+    # Longest streak in window
+    longest_streak = 0
+    run = 0
+    for entry in history:
+        if entry["met"] is True:
+            run += 1
+            longest_streak = max(longest_streak, run)
+        else:
+            run = 0
+
+    # 7-day rolling average
+    recent = [e["kwh"] for e in history[-7:] if e["kwh"] is not None]
+    rolling_avg_kwh = sum(recent) / len(recent) if recent else 0.0
+
+    return {
+        "has_active_goal": goal is not None,
+        "target_kwh": target_kwh,
+        "window_days": days,
+        "active_streak": active_streak,
+        "longest_streak": longest_streak,
+        "days_under": days_under,
+        "days_over": days_over,
+        "days_no_data": days_no_data,
+        "rolling_avg_kwh": round(rolling_avg_kwh, 3),
+        "history": history,
+    }

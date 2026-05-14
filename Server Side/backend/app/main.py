@@ -19,7 +19,8 @@ from app.observability import metrics_store
 from app.scheduler import (
     aggregate_hourly, aggregate_daily, check_goals,
     send_peak_reminder, send_daily_report,
-    calculate_decision_impacts, compute_rankings
+    calculate_decision_impacts, compute_rankings,
+    cleanup_old_notifications, detect_and_notify_anomalies,
 )
 from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
@@ -147,6 +148,19 @@ async def _job_smart_device_check():
         await NotificationEngine.check_device_scenario_notifications(db)
 
 
+async def _job_notification_cleanup():
+    """Daily TTL cleanup — delete notifications older than 90 days."""
+    await _run_tracked_job("notification_cleanup", lambda: cleanup_old_notifications(retention_days=90))
+
+
+async def _job_anomaly_scan():
+    """Hourly scan: notify users of any device exceeding 3x its baseline."""
+    await _run_tracked_job(
+        "anomaly_scan",
+        lambda: detect_and_notify_anomalies(threshold_factor=3.0, lookback_hours=2),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -191,8 +205,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
     scheduler.add_job(_job_classify_personas,  "cron",       day_of_week="sun", hour=2,    minute=0,  id="classify_personas")
     scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
+    scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
+    scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
     scheduler.start()
-    logger.info("✅ Scheduler started with 11 jobs")
+    logger.info("✅ Scheduler started with 13 jobs")
 
     yield
 

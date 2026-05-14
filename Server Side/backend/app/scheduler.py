@@ -277,47 +277,94 @@ async def calculate_decision_impacts():
 
 # ── Community Rankings ────────────────────────────────────────
 
-async def compute_rankings():
-    """Called daily at 01:30. Computes energy efficiency rankings for all users."""
-    logger.info("Computing community rankings...")
-    yesterday = (datetime.utcnow() - timedelta(days=1)).date()
+async def compute_rankings(target_date: date = None, period_type: str = "DAILY"):
+    """
+    Compute energy-efficiency rankings for all homes for a given period.
+
+    period_type:
+      DAILY   — rankings for `target_date` (one day)
+      WEEKLY  — rankings for the ISO week containing `target_date`,
+                period_start = Monday of that week
+      MONTHLY — rankings for the calendar month of `target_date`,
+                period_start = 1st of that month
+    """
+    if period_type not in ("DAILY", "WEEKLY", "MONTHLY"):
+        raise ValueError(f"Unsupported period_type: {period_type}")
+
+    target_date = target_date or (datetime.utcnow() - timedelta(days=1)).date()
+
+    if period_type == "DAILY":
+        period_start = target_date
+        period_end = target_date
+    elif period_type == "WEEKLY":
+        # Monday of target_date's week
+        period_start = target_date - timedelta(days=target_date.weekday())
+        period_end = period_start + timedelta(days=6)
+    else:  # MONTHLY
+        period_start = target_date.replace(day=1)
+        # Last day of month: jump to next month's day=1, subtract 1 day
+        if period_start.month == 12:
+            next_month_first = period_start.replace(year=period_start.year + 1, month=1)
+        else:
+            next_month_first = period_start.replace(month=period_start.month + 1)
+        period_end = next_month_first - timedelta(days=1)
+
+    logger.info(
+        "Computing %s rankings for period %s -> %s",
+        period_type, period_start, period_end,
+    )
 
     async with AsyncSessionLocal() as db:
-        # Get all homes with data yesterday
+        # Aggregate home_daily_totals across the period for each home
         result = await db.execute(
-            select(HomeDailyTotal, Home).join(Home, HomeDailyTotal.home_id == Home.id)
-            .where(HomeDailyTotal.day_date == yesterday)
-            .order_by(HomeDailyTotal.total_kwh.asc())  # Lower usage = better
+            select(
+                Home.id.label("home_id"),
+                Home.user_id,
+                Home.home_name,
+                func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
+                func.sum(HomeDailyTotal.total_cost_gbp).label("total_cost"),
+            )
+            .join(HomeDailyTotal, HomeDailyTotal.home_id == Home.id)
+            .where(
+                HomeDailyTotal.day_date >= period_start,
+                HomeDailyTotal.day_date <= period_end,
+            )
+            .group_by(Home.id, Home.user_id, Home.home_name)
+            .order_by(func.sum(HomeDailyTotal.total_kwh).asc())  # Lower usage = better
         )
         rows = result.all()
         total_users = len(rows)
 
-        for rank, (hdt, home) in enumerate(rows, start=1):
+        # Period length in days — used to scale per-day goals up to the period
+        period_days = (period_end - period_start).days + 1
+
+        for rank, hdt in enumerate(rows, start=1):
             try:
-                # Efficiency score: based on kWh per occupant
-                home_result = await db.execute(select(Home).where(Home.id == home.id))
+                home_result = await db.execute(select(Home).where(Home.id == hdt.home_id))
                 home_obj = home_result.scalar_one_or_none()
-                occupants = max(home_obj.num_occupants or 1, 1)
-                kwh_per_person = hdt.total_kwh / occupants
+                occupants = max((home_obj.num_occupants if home_obj else 1) or 1, 1)
+                # Per-occupant per-day usage normalises across home size + period length
+                kwh_per_person_per_day = float(hdt.total_kwh) / occupants / max(period_days, 1)
 
-                # Score: 100 for 0 kWh/person, drops linearly per 5 kWh/person
-                eff_score = max(0.0, 100.0 - (kwh_per_person * 10))
+                # Score: 100 at 0 kWh/person/day, drops 10pts per kWh/person/day
+                eff_score = max(0.0, min(100.0, 100.0 - (kwh_per_person_per_day * 10.0)))
 
-                # Goal adherence score
-                user_result = await db.execute(select(User).where(User.id == home.user_id))
+                user_result = await db.execute(select(User).where(User.id == hdt.user_id))
                 user = user_result.scalar_one_or_none()
                 daily_goal = user.daily_energy_goal_kwh if user else None
                 if daily_goal and daily_goal > 0:
-                    adherence = max(0.0, min(100.0, (daily_goal / max(hdt.total_kwh, 0.001)) * 100))
+                    period_goal = daily_goal * period_days
+                    adherence = max(0.0, min(100.0, (period_goal / max(float(hdt.total_kwh), 0.001)) * 100.0))
                 else:
-                    adherence = 70.0  # Default if no goal set
+                    adherence = 70.0  # Default when no goal set
 
-                # Decision response score (from yesterday's decisions)
+                # Decision response score within the period
                 from app.models import UserDecision
                 dec_result = await db.execute(
                     select(func.avg(UserDecision.effectiveness_score)).where(
-                        UserDecision.user_id == home.user_id,
-                        func.date(UserDecision.created_at) == yesterday,
+                        UserDecision.user_id == hdt.user_id,
+                        func.date(UserDecision.created_at) >= period_start,
+                        func.date(UserDecision.created_at) <= period_end,
                     )
                 )
                 avg_decision_score = dec_result.scalar() or 70.0
@@ -325,12 +372,11 @@ async def compute_rankings():
                 overall = (eff_score * 0.4 + adherence * 0.35 + float(avg_decision_score) * 0.25)
                 percentile = ((total_users - rank) / max(total_users - 1, 1)) * 100
 
-                # Upsert ranking
                 existing = await db.execute(
                     select(EnergyRanking).where(
-                        EnergyRanking.user_id == home.user_id,
-                        EnergyRanking.period_type == "DAILY",
-                        EnergyRanking.period_start == yesterday,
+                        EnergyRanking.user_id == hdt.user_id,
+                        EnergyRanking.period_type == period_type,
+                        EnergyRanking.period_start == period_start,
                     )
                 )
                 ranking = existing.scalar_one_or_none()
@@ -342,14 +388,14 @@ async def compute_rankings():
                     ranking.efficiency_score = round(eff_score, 1)
                     ranking.goal_adherence_score = round(adherence, 1)
                     ranking.decision_response_score = round(float(avg_decision_score), 1)
-                    ranking.total_kwh = hdt.total_kwh
-                    ranking.total_cost_gbp = hdt.total_cost_gbp
+                    ranking.total_kwh = float(hdt.total_kwh)
+                    ranking.total_cost_gbp = float(hdt.total_cost or 0)
                 else:
                     ranking = EnergyRanking(
-                        user_id=home.user_id,
-                        home_id=home.id,
-                        period_type="DAILY",
-                        period_start=yesterday,
+                        user_id=hdt.user_id,
+                        home_id=hdt.home_id,
+                        period_type=period_type,
+                        period_start=period_start,
                         overall_score=round(overall, 1),
                         rank_position=rank,
                         total_users=total_users,
@@ -357,16 +403,79 @@ async def compute_rankings():
                         efficiency_score=round(eff_score, 1),
                         goal_adherence_score=round(adherence, 1),
                         decision_response_score=round(float(avg_decision_score), 1),
-                        total_kwh=hdt.total_kwh,
-                        total_cost_gbp=hdt.total_cost_gbp,
+                        total_kwh=float(hdt.total_kwh),
+                        total_cost_gbp=float(hdt.total_cost or 0),
                     )
                     db.add(ranking)
 
             except Exception as e:
-                logger.error(f"Ranking error for home {home.id}: {e}")
+                logger.error("Ranking error for home %s: %s", hdt.home_id, e)
 
         await db.commit()
-    logger.info(f"Rankings computed for {total_users} homes")
+    logger.info("Rankings computed: %s homes for %s %s", total_users, period_type, period_start)
+
+
+async def compute_rankings_for_range(
+    start_date: date = None,
+    end_date: date = None,
+    period_types: tuple = ("DAILY", "WEEKLY", "MONTHLY"),
+):
+    """
+    Compute rankings for every period that intersects [start_date, end_date].
+    If dates are omitted, the range derives from the available HomeDailyTotal data.
+    Idempotent — safe to re-run.
+    """
+    async with AsyncSessionLocal() as db:
+        bounds = await db.execute(
+            select(func.min(HomeDailyTotal.day_date), func.max(HomeDailyTotal.day_date))
+        )
+        min_d, max_d = bounds.one()
+    if not min_d or not max_d:
+        logger.info("compute_rankings_for_range: no HomeDailyTotal rows yet — skipping")
+        return {"daily": 0, "weekly": 0, "monthly": 0}
+
+    start_date = start_date or min_d
+    end_date = end_date or max_d
+
+    counts = {"daily": 0, "weekly": 0, "monthly": 0}
+
+    if "DAILY" in period_types:
+        d = start_date
+        while d <= end_date:
+            await compute_rankings(d, "DAILY")
+            counts["daily"] += 1
+            d += timedelta(days=1)
+
+    if "WEEKLY" in period_types:
+        # Snap to Monday of the week that contains start_date
+        wk_cursor = start_date - timedelta(days=start_date.weekday())
+        seen_weeks: set = set()
+        while wk_cursor <= end_date:
+            if wk_cursor not in seen_weeks:
+                await compute_rankings(wk_cursor, "WEEKLY")
+                seen_weeks.add(wk_cursor)
+                counts["weekly"] += 1
+            wk_cursor += timedelta(days=7)
+
+    if "MONTHLY" in period_types:
+        m_cursor = start_date.replace(day=1)
+        seen_months: set = set()
+        while m_cursor <= end_date:
+            if m_cursor not in seen_months:
+                await compute_rankings(m_cursor, "MONTHLY")
+                seen_months.add(m_cursor)
+                counts["monthly"] += 1
+            # Advance to first of next month
+            if m_cursor.month == 12:
+                m_cursor = m_cursor.replace(year=m_cursor.year + 1, month=1)
+            else:
+                m_cursor = m_cursor.replace(month=m_cursor.month + 1)
+
+    logger.info(
+        "Rankings range computed (%s -> %s): %s",
+        start_date, end_date, counts,
+    )
+    return counts
 
 
 # ── Automated Analytics Thresholds ──────────────────────────────
@@ -431,3 +540,190 @@ async def evaluate_analytics_thresholds():
             )
             
     logger.info("Analytics thresholds evaluation complete")
+
+
+# ── Bootstrap: aggregate ALL history on demand ────────────────
+
+async def detect_and_notify_anomalies(
+    threshold_factor: float = 3.0,
+    lookback_hours: int = 24,
+) -> dict:
+    """
+    Scan recent hourly_summary rows for any device that exceeded
+    `threshold_factor × its 30-day baseline` for the same hour-of-day, and
+    create a per-user notification about each anomaly found.
+
+    Idempotent — uses NotificationEngine's 12-hour dedup so re-running won't
+    spam the same user about the same anomaly.
+
+    Designed to run hourly via APScheduler.
+    """
+    from app.notification_engine import NotificationEngine
+
+    logger.info("Scanning for anomalous device usage (factor=%s, lookback=%sh)…", threshold_factor, lookback_hours)
+    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    since = now - timedelta(hours=lookback_hours)
+    baseline_window_start = now - timedelta(days=30)
+
+    async with AsyncSessionLocal() as db:
+        # 30-day baseline per (device, hour-of-day)
+        baseline_rows = (await db.execute(
+            select(
+                HourlySummary.device_id,
+                func.hour(HourlySummary.hour_start).label("hod"),
+                func.avg(HourlySummary.total_kwh).label("baseline_avg_kwh"),
+            )
+            .where(HourlySummary.hour_start >= baseline_window_start)
+            .group_by(HourlySummary.device_id, func.hour(HourlySummary.hour_start))
+        )).all()
+        baseline = {(int(r.device_id), int(r.hod)): float(r.baseline_avg_kwh or 0) for r in baseline_rows}
+
+        # Recent hourly buckets to evaluate
+        from app.models import Notification
+        recent_rows = (await db.execute(
+            select(
+                HourlySummary.device_id,
+                HourlySummary.hour_start,
+                HourlySummary.total_kwh,
+                Device.name.label("device_name"),
+                Device.appliance_key,
+                Home.user_id,
+                Home.id.label("home_id"),
+            )
+            .join(Device, HourlySummary.device_id == Device.id)
+            .join(Home, Device.home_id == Home.id)
+            .where(HourlySummary.hour_start >= since, Device.is_active.is_(True))
+        )).all()
+
+        created = 0
+        skipped_dedup = 0
+        skipped_below = 0
+
+        for r in recent_rows:
+            baseline_val = baseline.get((int(r.device_id), r.hour_start.hour), 0)
+            if baseline_val <= 0.005:
+                continue
+            kwh = float(r.total_kwh or 0)
+            ratio = kwh / baseline_val
+            if ratio < threshold_factor:
+                skipped_below += 1
+                continue
+
+            severity = "CRITICAL" if ratio >= threshold_factor * 2 else "WARNING"
+            hour_label = r.hour_start.strftime("%H:%M")
+            title = f"⚠️ Unusual {r.device_name} usage at {hour_label}"
+            message = (
+                f"Your {r.device_name} used {kwh:.3f} kWh between "
+                f"{hour_label} and {(r.hour_start + timedelta(hours=1)).strftime('%H:%M')} — "
+                f"that's {ratio:.1f}× your usual amount for this hour. "
+                f"Check whether the appliance was left running, or if a high-energy cycle was used."
+            )
+
+            notif = await NotificationEngine.create_notification(
+                db=db,
+                user_id=r.user_id,
+                title=title,
+                message=message,
+                notification_type="HIGH_CONSUMPTION",
+                severity=severity,
+                home_id=r.home_id,
+                device_id=r.device_id,
+                requires_user_action=True,
+                action_hint="Investigate this device's usage.",
+                action_button_text="View device",
+            )
+            if notif:
+                created += 1
+            else:
+                skipped_dedup += 1
+
+    logger.info(
+        "Anomaly notification scan complete: created=%d, skipped_dedup=%d, skipped_below=%d, threshold=%sx",
+        created, skipped_dedup, skipped_below, threshold_factor,
+    )
+    return {
+        "created": created,
+        "skipped_dedup": skipped_dedup,
+        "skipped_below": skipped_below,
+        "threshold_factor": threshold_factor,
+        "lookback_hours": lookback_hours,
+    }
+
+
+async def cleanup_old_notifications(retention_days: int = 90) -> dict:
+    """
+    Delete notifications older than `retention_days` so the table doesn't
+    grow forever. Mirrors the MongoDB TTL index that the old system used.
+
+    Default retention: 90 days. Returns counts of deleted notifications +
+    user_decisions linked to those notifications (orphaned references are
+    preserved via NULL because the FK uses ON DELETE SET NULL).
+    """
+    from sqlalchemy import delete
+    from app.models import Notification
+
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    logger.info("Cleaning up notifications older than %s (cutoff=%s)", retention_days, cutoff)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            delete(Notification).where(Notification.created_at < cutoff)
+        )
+        await db.commit()
+        deleted = result.rowcount or 0
+
+    logger.info("Notification cleanup complete: deleted %d rows", deleted)
+    return {"deleted": deleted, "retention_days": retention_days, "cutoff": cutoff.isoformat()}
+
+
+async def aggregate_all_history() -> dict:
+    """
+    Scan energy_readings for the full available date range, then run
+    aggregate_hourly for every completed hour and aggregate_daily for every
+    day in that range. Idempotent — re-running is safe.
+
+    Returns a summary dict with row counts and the processed window.
+    """
+    logger.info("Bootstrap aggregation: scanning available history...")
+
+    async with AsyncSessionLocal() as db:
+        bounds = await db.execute(
+            select(func.min(EnergyReading.recorded_at), func.max(EnergyReading.recorded_at))
+        )
+        first_ts, last_ts = bounds.one()
+
+    if not first_ts or not last_ts:
+        logger.info("Bootstrap aggregation: no readings found — nothing to do")
+        return {"hours_processed": 0, "days_processed": 0, "first_ts": None, "last_ts": None}
+
+    # Aggregate from the hour AFTER first_ts up to and including current_hour.
+    # aggregate_hourly(target_time) processes the hour BEFORE target_time, so
+    # pass target_time = hour_boundary + 1h to capture hour_boundary itself.
+    first_hour = first_ts.replace(minute=0, second=0, microsecond=0)
+    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+
+    hours_processed = 0
+    t = first_hour + timedelta(hours=1)
+    while t <= now + timedelta(hours=1):
+        await aggregate_hourly(t)
+        hours_processed += 1
+        t += timedelta(hours=1)
+
+    days_processed = 0
+    d = first_ts.date()
+    today = datetime.utcnow().date()
+    while d <= today:
+        await aggregate_daily(d)
+        days_processed += 1
+        d += timedelta(days=1)
+
+    logger.info(
+        "Bootstrap aggregation complete: %d hours, %d days processed (range %s -> %s)",
+        hours_processed, days_processed, first_ts, last_ts,
+    )
+    return {
+        "hours_processed": hours_processed,
+        "days_processed": days_processed,
+        "first_ts": first_ts.isoformat(),
+        "last_ts": last_ts.isoformat(),
+    }

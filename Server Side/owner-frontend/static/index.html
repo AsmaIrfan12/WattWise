@@ -10,6 +10,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+  <!-- D3 + d3-sankey for the Energy Flow Sankey diagram on the Analytics tab -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
   <link rel="stylesheet" href="/css/admin.css"/>
 </head>
 <body>
@@ -125,13 +128,23 @@
     <div class="charts-row">
       <div class="card chart-card">
         <div class="card-header">
-          <h2 class="card-title">Community Energy (7 days)</h2>
-          <div class="card-actions">
+          <h2 class="card-title" id="energy-chart-title">Community Energy (7 days)</h2>
+          <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+            <button class="btn-sm" id="btn-export-energy" title="Download as CSV">⬇ CSV</button>
             <select id="energy-period-select" class="select-sm">
-              <option value="7">7 days</option>
-              <option value="14">14 days</option>
-              <option value="30">30 days</option>
-              <option value="90">90 days</option>
+              <optgroup label="Hours">
+                <option value="h:1">Last 1 hour</option>
+                <option value="h:6">Last 6 hours</option>
+                <option value="h:12">Last 12 hours</option>
+                <option value="h:24">Last 24 hours</option>
+                <option value="h:48">Last 48 hours</option>
+              </optgroup>
+              <optgroup label="Days">
+                <option value="d:7" selected>7 days</option>
+                <option value="d:14">14 days</option>
+                <option value="d:30">30 days</option>
+                <option value="d:90">90 days</option>
+              </optgroup>
             </select>
           </div>
         </div>
@@ -143,6 +156,33 @@
         </div>
         <canvas id="chart-personas" height="100"></canvas>
       </div>
+    </div>
+
+    <!-- Live Device Telemetry -->
+    <div class="card chart-card" style="margin-top:16px">
+      <div class="card-header">
+        <h2 class="card-title" id="device-ts-title">Live Device Telemetry (Last 24 hours)</h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+          <label style="font-size:11px;color:#94a3b8;display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="device-ts-anomalies" checked> highlight anomalies
+          </label>
+          <select id="device-ts-home" class="select-sm">
+            <option value="">All homes</option>
+          </select>
+          <select id="device-ts-period" class="select-sm">
+            <option value="1">Last 1 hour</option>
+            <option value="6">Last 6 hours</option>
+            <option value="12">Last 12 hours</option>
+            <option value="24" selected>Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+            <option value="168">Last 7 days</option>
+          </select>
+          <button class="btn-sm" id="btn-export-device-ts" title="Download current view as CSV">⬇ CSV</button>
+          <span id="device-ts-status" style="font-size:11px;color:#94a3b8">—</span>
+        </div>
+      </div>
+      <canvas id="chart-device-ts" height="80"></canvas>
+      <div id="device-ts-anomaly-summary" style="font-size:11px;color:#ef4444;padding:6px 4px 0"></div>
     </div>
 
     <!-- Decision Impact + Rankings -->
@@ -235,9 +275,34 @@
           </div>
         </div>
         <div id="persona-cards" class="persona-grid"></div>
+        <div id="persona-strategy" style="font-size:12px;color:#94a3b8;padding:8px 4px 0;line-height:1.6">
+          <strong>Strategy:</strong> Each user is scored from a 30-day rolling window of EnergyRanking rows (efficiency 50% · goal adherence 30% · decision response 20%). Users with &lt; 2 ranking days or no readings in the last 14 days fall to <em>Disengaged</em>. The remaining users are sorted by combined score and assigned by community percentile: top 20% → Eco Champion · 55–79th percentile with improving trend → Active Improver · 25–79th → Steady User · bottom 25% → High Consumer.
+        </div>
       </div>
     </div>
 
+    <!-- Persona Distribution Over Time -->
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title" id="persona-history-title">Persona Distribution Over Time</h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+          <select id="persona-history-period" class="select-sm">
+            <option value="DAILY">By day</option>
+            <option value="WEEKLY" selected>By week</option>
+            <option value="MONTHLY">By month</option>
+          </select>
+          <select id="persona-history-buckets" class="select-sm">
+            <option value="7">Last 7</option>
+            <option value="12" selected>Last 12</option>
+            <option value="24">Last 24</option>
+            <option value="52">Last 52</option>
+          </select>
+        </div>
+      </div>
+      <canvas id="chart-persona-history" height="80"></canvas>
+    </div>
+
+    <!-- Persona Comparison (existing) -->
     <div class="card" style="margin-top:1.5rem">
       <div class="card-header">
         <h2 class="card-title">Persona Comparison</h2>
@@ -251,23 +316,48 @@
       </div>
       <canvas id="chart-persona-compare" height="80"></canvas>
     </div>
+
+    <!-- Persona Member Drill-down -->
+    <div class="card" style="margin-top:1.5rem;display:none" id="persona-members-card">
+      <div class="card-header">
+        <h2 class="card-title" id="persona-members-title">Persona Members</h2>
+        <div class="card-actions">
+          <button class="btn-sm" id="btn-close-persona-members">Close</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>User</th><th>Email</th><th>Overall</th><th>Efficiency</th><th>Adherence</th><th>Avg kWh/day</th><th>Days in window</th>
+            </tr>
+          </thead>
+          <tbody id="persona-members-tbody"><tr><td colspan="7" class="loading-row">—</td></tr></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <!-- ── SECTION: RANKINGS ─────────────────────────────────── -->
   <section class="section" id="section-rankings">
     <div class="card">
       <div class="card-header">
-        <h2 class="card-title">Community Rankings</h2>
-        <div class="card-actions">
+        <h2 class="card-title" id="rankings-title">Community Rankings</h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <select id="rankings-period" class="select-sm">
             <option value="DAILY">Daily</option>
             <option value="WEEKLY">Weekly</option>
             <option value="MONTHLY">Monthly</option>
           </select>
-          <input type="date" id="rankings-date" class="input-date"/>
-          <button class="btn-primary btn-sm" id="btn-load-rankings">Load</button>
+          <button class="btn-sm" id="btn-rankings-prev" title="Previous period">&larr;</button>
+          <select id="rankings-date-select" class="select-sm" style="min-width:140px"></select>
+          <button class="btn-sm" id="btn-rankings-next" title="Next period">&rarr;</button>
+          <button class="btn-sm" id="btn-rankings-latest" title="Jump to latest">Latest</button>
+          <button class="btn-sm" id="btn-export-rankings" title="Download as CSV">⬇ CSV</button>
+          <button class="btn-primary btn-sm" id="btn-rankings-recompute" title="Recompute rankings from raw data">⚙ Recompute</button>
         </div>
       </div>
+      <div id="rankings-meta" style="font-size:12px;color:#94a3b8;padding:0 4px 12px">—</div>
       <div class="table-wrap">
         <table class="data-table" id="rankings-table">
           <thead>
@@ -277,7 +367,7 @@
             </tr>
           </thead>
           <tbody id="rankings-tbody">
-            <tr><td colspan="9" class="loading-row">Select period and load rankings</td></tr>
+            <tr><td colspan="9" class="loading-row">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -330,6 +420,32 @@
       </div>
       <canvas id="chart-interactions" height="60"></canvas>
     </div>
+
+    <!-- Sankey: Energy Flow -->
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title" id="sankey-title">Energy Flow Sankey (last 7 days)</h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+          <select id="sankey-days" class="select-sm">
+            <option value="1">Last 24h</option>
+            <option value="7" selected>7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
+          <select id="sankey-top-homes" class="select-sm">
+            <option value="5">Top 5 homes</option>
+            <option value="10" selected>Top 10 homes</option>
+            <option value="20">Top 20 homes</option>
+          </select>
+          <button class="btn-sm" id="btn-sankey-refresh">↻</button>
+        </div>
+      </div>
+      <div id="sankey-container" style="padding:14px;min-height:380px;position:relative">
+        <div class="loading-row">Loading…</div>
+      </div>
+      <div id="sankey-summary" style="font-size:11px;color:#94a3b8;padding:0 14px 14px"></div>
+    </div>
+
     <div class="card" style="margin-top:1.5rem">
       <div class="card-header">
         <h2 class="card-title">Advanced Comparative Analytics</h2>
@@ -384,6 +500,19 @@
 
   <!-- ── SECTION: DEVICES ──────────────────────────────────── -->
   <section class="section" id="section-devices">
+    <!-- MQTT Broker Health -->
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <h2 class="card-title">MQTT Broker Health</h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+          <span id="mqtt-broker-status" style="font-size:11px;padding:3px 8px;border-radius:12px;background:rgba(148,163,184,.2);color:#94a3b8">checking…</span>
+          <button class="btn-sm" id="btn-refresh-mqtt-stats">↻</button>
+        </div>
+      </div>
+      <div id="mqtt-broker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;padding:6px 4px"></div>
+      <div id="mqtt-broker-meta" style="font-size:11px;color:#94a3b8;padding:8px 4px 0">—</div>
+    </div>
+
     <div class="card">
       <div class="card-header">
         <h2 class="card-title">RPi Device Status</h2>
@@ -410,6 +539,40 @@
 
   <!-- ── SECTION: NOTIFICATIONS ────────────────────────────── -->
   <section class="section" id="section-notifications">
+    <!-- Notification Breakdown -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title">Notification Breakdown (system-wide)</h2>
+        <div class="card-actions">
+          <button class="btn-sm" id="btn-refresh-notif-breakdown">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="notif-breakdown-summary" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:0 4px 12px"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;padding:6px 4px">
+        <div>
+          <div class="card-title" style="font-size:.85rem;margin-bottom:6px">By Severity</div>
+          <canvas id="chart-notif-by-severity" height="100"></canvas>
+        </div>
+        <div>
+          <div class="card-title" style="font-size:.85rem;margin-bottom:6px">By Type</div>
+          <canvas id="chart-notif-by-type" height="100"></canvas>
+        </div>
+        <div>
+          <div class="card-title" style="font-size:.85rem;margin-bottom:6px">By Appliance</div>
+          <canvas id="chart-notif-by-appliance" height="100"></canvas>
+        </div>
+      </div>
+      <div style="margin-top:18px;padding:0 4px">
+        <div class="card-title" style="font-size:.85rem;margin-bottom:6px">Top Recipients (last all-time)</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>User</th><th>Email</th><th style="text-align:right">Notifications</th></tr></thead>
+            <tbody id="notif-top-users-tbody"><tr><td colspan="3" class="loading-row">—</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="notif-layout">
       <!-- Send Notification -->
       <div class="card">
@@ -447,6 +610,11 @@
           <div id="notif-target-extra" style="display:none">
             <input type="text" id="notif-user-ids" class="input-field" placeholder="Comma-separated user IDs…"/>
           </div>
+          <div id="notif-target-persona" style="display:none">
+            <select id="notif-persona-id" class="input-field">
+              <option value="">Loading personas…</option>
+            </select>
+          </div>
           <button type="submit" class="btn-primary btn-full" id="btn-notif-send">Send Notification</button>
           <div id="notif-feedback" class="form-feedback"></div>
         </form>
@@ -460,7 +628,33 @@
           Uses today's usage data + environmental factors. Deduplication: 12-hour window per device.
         </p>
         <button class="btn-primary" id="btn-smart-notif-all">🔔 Run Smart Notifications Now</button>
+        <button class="btn-sm" id="btn-anomaly-scan" style="margin-left:8px">⚠ Run Anomaly Scan</button>
         <div id="smart-notif-feedback" class="form-feedback" style="margin-top:12px"></div>
+      </div>
+
+      <!-- Decision Simulator -->
+      <div class="card">
+        <div class="card-header"><h2 class="card-title">Decision Impact Simulator (Research)</h2></div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 14px">
+          Generates synthetic user decisions on recent notifications so the
+          <strong>Decision Impact</strong> dashboard card has data on a fresh
+          deployment. Default split: 55% accepted · 20% deferred · 25% rejected.
+          Each decision gets realistic <em>response_time</em>, <em>energy_before/after</em>,
+          and <em>effectiveness_score</em>. <strong>Research / demo only.</strong>
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <label style="font-size:12px">Window (days)
+            <input type="number" id="decisions-window-days" value="7" min="1" max="30" class="input-field" style="width:80px;padding:4px 8px"/>
+          </label>
+          <label style="font-size:12px">Accept rate
+            <input type="number" id="decisions-accept-rate" value="0.55" min="0" max="1" step="0.05" class="input-field" style="width:80px;padding:4px 8px"/>
+          </label>
+          <label style="font-size:12px">Defer rate
+            <input type="number" id="decisions-defer-rate" value="0.20" min="0" max="1" step="0.05" class="input-field" style="width:80px;padding:4px 8px"/>
+          </label>
+          <button class="btn-primary" id="btn-simulate-decisions">⚙ Simulate Decisions</button>
+        </div>
+        <div id="decisions-feedback" class="form-feedback"></div>
       </div>
 
       <!-- Templates -->

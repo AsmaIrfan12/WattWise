@@ -78,6 +78,47 @@ async def deactivate_home(home_id: int, request: Request, db: AsyncSession = Dep
 
 # ── Devices ───────────────────────────────────────────────────
 
+# Known appliance → canonical entity_id base mapping
+# Ported from old generateEntityIds() in user-controller.js
+_APPLIANCE_ENTITY_BASE = {
+    "kettle": "kettle",
+    "microwave": "microwave",
+    "dishwasher": "dishwasher",
+    "washing_machine": "washing_machine",
+    "washingmachine": "washing_machine",
+    "toaster": "toaster",
+    "dryer": "dryer",
+    "coffeemachine": "coffeemachine",
+    "airfryer": "airfryer",
+    "cooker": "cooker",
+    "water_purifier": "water_purifier",
+    "waterpurifier": "water_purifier",
+    "gaming_console": "gaming_console",
+    "xbox": "gaming_console",
+    "tv": "tv",
+}
+
+
+def _derive_entity_ids(name: str, appliance_key: str | None) -> dict:
+    """
+    Derive (entity_id, power_entity_id, switch_entity_id) from a device name
+    or appliance_key. Mirrors the old Node generateEntityIds() helper so that
+    existing MQTT topic conventions keep working.
+    """
+    import re
+    # Prefer the canonical appliance_key mapping when available
+    base = _APPLIANCE_ENTITY_BASE.get((appliance_key or "").lower())
+    if not base:
+        # Fallback: slugify the device name
+        slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+        base = slug or "device"
+    return {
+        "entity_id": f"{base}_current_consumption",
+        "power_entity_id": f"{base}_current_consumption",
+        "switch_entity_id": f"{base}_switch_state",
+    }
+
+
 @router.post("/homes/{home_id}/devices", response_model=DeviceResponse, status_code=201)
 async def add_device(home_id: int, body: DeviceCreate, request: Request, db: AsyncSession = Depends(get_db)):
     user_id = _get_user_id(request)
@@ -86,7 +127,16 @@ async def add_device(home_id: int, body: DeviceCreate, request: Request, db: Asy
     if not home_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Home not found")
 
-    device = Device(home_id=home_id, **body.model_dump())
+    payload = body.model_dump()
+
+    # Auto-derive entity IDs if the caller didn't supply them
+    if not payload.get("entity_id") or not payload.get("power_entity_id"):
+        derived = _derive_entity_ids(payload.get("name"), payload.get("appliance_key"))
+        for k, v in derived.items():
+            if not payload.get(k):
+                payload[k] = v
+
+    device = Device(home_id=home_id, **payload)
     db.add(device)
     await db.commit()
     await db.refresh(device)

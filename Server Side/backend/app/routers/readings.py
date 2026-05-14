@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -229,4 +229,204 @@ async def get_home_today(home_id: int, request: Request, db: AsyncSession = Depe
         "total_cost_gbp": round(EnergyAnalysisEngine.calculate_daily_cost(total_kwh), 2),
         "is_peak_time": settings.is_peak_time(),
         "devices": summary,
+    }
+
+
+@router.get("/{device_id}/live")
+async def get_live_reading(
+    device_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    points: int = Query(default=20, ge=1, le=120),
+):
+    """
+    Latest power readings for a single device, returned as a sparkline-friendly
+    list. Suitable for a 2–3 s polling loop driving a live wattage gauge.
+
+    Each entry: {recorded_at, power_watts, switch_state}
+    """
+    user_id = _get_user_id(request)
+    await _verify_device_access(db, device_id, user_id)
+
+    result = await db.execute(
+        select(EnergyReading.recorded_at, EnergyReading.power_watts, EnergyReading.switch_state)
+        .where(EnergyReading.device_id == device_id)
+        .order_by(EnergyReading.recorded_at.desc())
+        .limit(points)
+    )
+    rows = result.all()
+    if not rows:
+        return {"device_id": device_id, "current_watts": 0.0, "points": []}
+
+    # Reverse so points are chronological
+    rows = list(reversed(rows))
+    current_w = float(rows[-1].power_watts or 0)
+    avg_w = sum(float(r.power_watts or 0) for r in rows) / len(rows)
+    peak_w = max(float(r.power_watts or 0) for r in rows)
+
+    return {
+        "device_id": device_id,
+        "current_watts": round(current_w, 1),
+        "avg_watts_window": round(avg_w, 1),
+        "peak_watts_window": round(peak_w, 1),
+        "switch_state": rows[-1].switch_state,
+        "last_seen": rows[-1].recorded_at.isoformat(),
+        "points": [
+            {
+                "ts": r.recorded_at.isoformat(),
+                "w": round(float(r.power_watts or 0), 1),
+                "state": r.switch_state,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/{device_id}/standby")
+async def get_standby_analysis(
+    device_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=7, ge=1, le=90),
+):
+    """
+    Vampire-drain / standby-power analysis for a single device.
+
+    Walks raw energy_readings over the requested window, identifies time spent
+    below the active threshold but above zero (standby state), totals the
+    standby kWh, and projects an annualised cost. Useful for prompting
+    "unplug it overnight" decisions.
+
+    The standby/active classification reuses EnergyAnalysisEngine.detect_usage_cycles.
+    """
+    user_id = _get_user_id(request)
+    device = await _verify_device_access(db, device_id, user_id)
+
+    since = datetime.utcnow() - timedelta(days=days)
+    readings = await EnergyAnalysisEngine.get_device_readings_range(
+        db, device_id, since, datetime.utcnow()
+    )
+    if not readings:
+        return {
+            "device": {"id": device.id, "name": device.name, "appliance_key": device.appliance_key},
+            "window_days": days,
+            "message": "No readings in this period",
+        }
+
+    stats = EnergyAnalysisEngine.detect_usage_cycles(readings)
+    standby_kwh = stats.get("standby_kwh", 0.0)
+    total_kwh = stats.get("total_kwh", 0.0)
+    standby_share = (standby_kwh / total_kwh * 100) if total_kwh > 0 else 0.0
+
+    avg_daily_standby_kwh = standby_kwh / max(days, 1)
+    annual_standby_kwh = avg_daily_standby_kwh * 365
+    annual_standby_cost_gbp = EnergyAnalysisEngine.calculate_cost(annual_standby_kwh)
+
+    severity = (
+        "critical" if avg_daily_standby_kwh > 0.3 else
+        "warning" if avg_daily_standby_kwh > 0.1 else
+        "ok"
+    )
+    advice = {
+        "critical": "Significant vampire drain — unplug or use a smart plug timer when not in use.",
+        "warning": "Moderate standby draw — consider unplugging overnight.",
+        "ok": "Standby draw is within expected range.",
+    }[severity]
+
+    return {
+        "device": {"id": device.id, "name": device.name, "appliance_key": device.appliance_key},
+        "window_days": days,
+        "since": since.isoformat(),
+        "standby_kwh": round(standby_kwh, 4),
+        "total_kwh": round(total_kwh, 4),
+        "standby_share_pct": round(standby_share, 1),
+        "avg_daily_standby_kwh": round(avg_daily_standby_kwh, 4),
+        "annualised_standby_kwh": round(annual_standby_kwh, 2),
+        "annualised_standby_cost_gbp": round(annual_standby_cost_gbp, 2),
+        "severity": severity,
+        "advice": advice,
+    }
+
+
+@router.get("/{device_id}/hourly-profile")
+async def get_hourly_profile(
+    device_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=14, ge=1, le=90),
+):
+    """
+    24-bucket hour-of-day profile: average kWh consumed at each hour of the day
+    over the last `days` days. Pivots `hourly_summary` rows so the same hour
+    across multiple days is averaged together.
+
+    Useful for spotting habitual peak-hour usage and for "shift this load to
+    off-peak" advice. Ported from the old getDeviceHourlyBreakdown controller.
+    """
+    user_id = _get_user_id(request)
+    await _verify_device_access(db, device_id, user_id)
+
+    since = datetime.utcnow() - timedelta(days=days)
+
+    result = await db.execute(
+        select(
+            func.hour(HourlySummary.hour_start).label("hour_of_day"),
+            func.avg(HourlySummary.total_kwh).label("avg_kwh"),
+            func.avg(HourlySummary.avg_watts).label("avg_watts"),
+            func.max(HourlySummary.max_watts).label("peak_watts"),
+            func.sum(HourlySummary.usage_cycles).label("total_cycles"),
+            func.count(HourlySummary.id).label("samples"),
+        )
+        .where(HourlySummary.device_id == device_id, HourlySummary.hour_start >= since)
+        .group_by(func.hour(HourlySummary.hour_start))
+        .order_by(func.hour(HourlySummary.hour_start).asc())
+    )
+    rows = result.all()
+
+    # Build a fully-populated 24-bucket profile (zero-fill missing hours)
+    by_hour = {int(r.hour_of_day): r for r in rows}
+    tariff_peak_start = settings.ENERGY_PEAK_START_HOUR
+    tariff_peak_end = settings.ENERGY_PEAK_END_HOUR
+
+    profile = []
+    total_avg_kwh = 0.0
+    for h in range(24):
+        r = by_hour.get(h)
+        avg_kwh = round(float(r.avg_kwh or 0), 4) if r else 0.0
+        total_avg_kwh += avg_kwh
+        profile.append({
+            "hour": h,
+            "label": f"{h:02d}:00",
+            "avg_kwh": avg_kwh,
+            "avg_watts": round(float(r.avg_watts or 0), 1) if r else 0.0,
+            "peak_watts": round(float(r.peak_watts or 0), 1) if r else 0.0,
+            "total_cycles": int(r.total_cycles or 0) if r else 0,
+            "samples": int(r.samples or 0) if r else 0,
+            "is_peak_tariff": tariff_peak_start <= h < tariff_peak_end,
+        })
+
+    # Identify the user's personal peak hours (top 3 by avg kWh)
+    sorted_by_kwh = sorted(profile, key=lambda x: x["avg_kwh"], reverse=True)
+    personal_peak_hours = [p["hour"] for p in sorted_by_kwh[:3] if p["avg_kwh"] > 0]
+    for p in profile:
+        p["is_personal_peak"] = p["hour"] in personal_peak_hours
+
+    # Tariff-peak vs off-peak split
+    peak_tariff_kwh = sum(p["avg_kwh"] for p in profile if p["is_peak_tariff"])
+    off_peak_kwh = total_avg_kwh - peak_tariff_kwh
+    peak_share_pct = (peak_tariff_kwh / total_avg_kwh * 100) if total_avg_kwh > 0 else 0.0
+
+    return {
+        "device_id": device_id,
+        "window_days": days,
+        "since": since.isoformat(),
+        "summary": {
+            "avg_daily_kwh": round(total_avg_kwh, 3),
+            "peak_tariff_kwh_share_pct": round(peak_share_pct, 1),
+            "peak_tariff_kwh": round(peak_tariff_kwh, 3),
+            "off_peak_kwh": round(off_peak_kwh, 3),
+            "personal_peak_hours": personal_peak_hours,
+            "tariff_peak_window": f"{tariff_peak_start:02d}:00–{tariff_peak_end:02d}:00",
+        },
+        "profile": profile,
     }

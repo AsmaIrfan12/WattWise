@@ -257,6 +257,7 @@ class RankingResponse(BaseModel):
 
 class AdminNotificationSend(BaseModel):
     user_ids: Optional[List[int]] = None   # None = broadcast to all
+    target_persona_id: Optional[int] = None  # restrict to users in this persona
     title: str
     message: str
     notification_type: str = "ADMIN_BROADCAST"
