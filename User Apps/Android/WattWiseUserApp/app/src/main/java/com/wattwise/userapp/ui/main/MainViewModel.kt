@@ -20,7 +20,7 @@ import javax.inject.Inject
 /**
  * ViewModel for the main WebView screen.
  * Manages server URL state, connectivity, page loading, WebView URL persistence
- * across configuration changes (rotation), and session logout.
+ * across configuration changes (rotation), session logout, and deep-link tab navigation.
  *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
@@ -28,7 +28,7 @@ import javax.inject.Inject
 class MainViewModel @Inject constructor(
     private val repository: ServerRepository,
     private val authRepository: AuthRepository,
-    secureTokenStore: SecureTokenStore
+    val secureTokenStore: SecureTokenStore
 ) : ViewModel() {
 
     // ── Server URL (reactive) ─────────────────────────────────────────────
@@ -75,6 +75,21 @@ class MainViewModel @Inject constructor(
             // Only persist navigation URLs, not the initial token-fragment URL
             _lastWebViewUrl.value = url
         }
+    }
+
+    // ── Deep-link tab navigation ──────────────────────────────────────────
+    // Set when a deep-link Intent or notification tap requests a specific tab.
+    // Consumed by MainScreen after the WebView evaluates the JS.
+    private val _pendingDeepLinkTab = MutableStateFlow<String?>(null)
+    val pendingDeepLinkTab: StateFlow<String?> = _pendingDeepLinkTab.asStateFlow()
+
+    fun handleDeepLink(tab: String) {
+        Timber.d("🔗 Deep-link queued: $tab")
+        _pendingDeepLinkTab.value = tab
+    }
+
+    fun deepLinkConsumed() {
+        _pendingDeepLinkTab.value = null
     }
 
     // ── Logout ────────────────────────────────────────────────────────────

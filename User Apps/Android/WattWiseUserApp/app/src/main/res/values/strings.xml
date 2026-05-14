@@ -34,4 +34,12 @@
     <!-- Permissions -->
     <string name="permission_notification_rationale">WattWise needs notification permission to alert you about energy usage and goal progress.</string>
     <string name="permission_location_rationale">WattWise uses your location to register your home\'s address for energy benchmarking.</string>
+
+    <!-- App Shortcuts -->
+    <string name="shortcut_devices_short">Devices</string>
+    <string name="shortcut_devices_long">My Devices</string>
+    <string name="shortcut_notifs_short">Alerts</string>
+    <string name="shortcut_notifs_long">My Notifications</string>
+    <string name="shortcut_goals_short">Goals</string>
+    <string name="shortcut_goals_long">My Energy Goals</string>
 </resources>

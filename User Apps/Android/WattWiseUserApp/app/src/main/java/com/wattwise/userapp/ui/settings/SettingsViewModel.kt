@@ -2,6 +2,7 @@ package com.wattwise.userapp.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.wattwise.userapp.data.local.NotificationPrefsStore
 import com.wattwise.userapp.data.local.TokenDataStore
 import com.wattwise.userapp.data.repository.ServerRepository
 import com.wattwise.userapp.domain.model.Resource
@@ -17,15 +18,18 @@ import javax.inject.Inject
 
 /**
  * ViewModel for the Settings screen.
- * Manages server config CRUD and connection testing.
+ * Manages server config CRUD, connection testing, biometric unlock preference.
+ *
+ * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: ServerRepository,
-    private val tokenDataStore: TokenDataStore
+    private val tokenDataStore: TokenDataStore,
+    private val notifPrefs: NotificationPrefsStore
 ) : ViewModel() {
 
-    // ── Reactive preferences ──
+    // ── Reactive preferences ──────────────────────────────────────────────
     val serverUrl: StateFlow<String> = repository.serverUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
@@ -35,11 +39,22 @@ class SettingsViewModel @Inject constructor(
     val timeout: StateFlow<Int> = repository.timeout
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 20)
 
-    // ── Connection test state ──
+    // ── Biometric unlock preference ───────────────────────────────────────
+    val biometricEnabled: StateFlow<Boolean> = notifPrefs.biometricEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            notifPrefs.setBiometricEnabled(enabled)
+            Timber.d("Biometric unlock: $enabled")
+        }
+    }
+
+    // ── Connection test state ─────────────────────────────────────────────
     private val _testResult = MutableStateFlow<Resource<Int>?>(null)
     val testResult: StateFlow<Resource<Int>?> = _testResult.asStateFlow()
 
-    // ── Actions ──
+    // ── Actions ───────────────────────────────────────────────────────────
 
     fun saveSettings(url: String, port: Int, timeout: Int) {
         viewModelScope.launch {

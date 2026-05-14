@@ -13,6 +13,8 @@ datastore = "1.1.7"
 splashscreen = "1.0.1"
 security-crypto = "1.1.0-alpha06"
 biometric = "1.2.0-alpha05"
+work-runtime = "2.10.1"
+hilt-work = "1.2.0"
 
 # ── Compose ──
 compose-bom = "2026.03.00"
@@ -55,6 +57,9 @@ datastore-preferences = { module = "androidx.datastore:datastore-preferences", v
 splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "splashscreen" }
 security-crypto = { module = "androidx.security:security-crypto", version.ref = "security-crypto" }
 biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work-runtime" }
+hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "hilt-work" }
+hilt-work-compiler = { module = "androidx.hilt:hilt-compiler", version.ref = "hilt-work" }
 
 # Compose BOM
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }

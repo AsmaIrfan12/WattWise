@@ -24,6 +24,9 @@ import com.wattwise.userapp.ui.splash.SplashScreen
  *         ──(new user)───► Signup ──(success)──► Main
  *         ──(forgot pw)──► ForgotPassword ──► Login
  *
+ * Settings flow:
+ *   Main ──(settings icon)──► Settings ──(about row)──► About
+ *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
 object Routes {
@@ -117,6 +120,9 @@ fun WattWiseNavGraph(
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
+                onNavigateToAbout = {
+                    navController.navigate(Routes.ABOUT)
+                },
                 onLogout = {
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }

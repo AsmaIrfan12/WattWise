@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Shortcut 1: My Devices -->
+    <shortcut
+        android:shortcutId="shortcut_devices"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_manage"
+        android:shortcutShortLabel="@string/shortcut_devices_short"
+        android:shortcutLongLabel="@string/shortcut_devices_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="wattwise://tab/devices"
+            android:targetPackage="com.wattwise.userapp"
+            android:targetClass="com.wattwise.userapp.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Shortcut 2: Notifications / Alerts -->
+    <shortcut
+        android:shortcutId="shortcut_notifications"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_popup_reminder"
+        android:shortcutShortLabel="@string/shortcut_notifs_short"
+        android:shortcutLongLabel="@string/shortcut_notifs_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="wattwise://tab/notifications"
+            android:targetPackage="com.wattwise.userapp"
+            android:targetClass="com.wattwise.userapp.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Shortcut 3: Goals -->
+    <shortcut
+        android:shortcutId="shortcut_goals"
+        android:enabled="true"
+        android:icon="@android:drawable/btn_star_big_on"
+        android:shortcutShortLabel="@string/shortcut_goals_short"
+        android:shortcutLongLabel="@string/shortcut_goals_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="wattwise://tab/goals"
+            android:targetPackage="com.wattwise.userapp"
+            android:targetClass="com.wattwise.userapp.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+</shortcuts>

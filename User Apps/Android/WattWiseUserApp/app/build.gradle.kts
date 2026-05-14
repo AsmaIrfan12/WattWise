@@ -68,6 +68,9 @@ dependencies {
     implementation(libs.splashscreen)
     implementation(libs.security.crypto)
     implementation(libs.biometric)
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.work.compiler)
 
     // ── Material (XML theme support) ──
     implementation(libs.material)
