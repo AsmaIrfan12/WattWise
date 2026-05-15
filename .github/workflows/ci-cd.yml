@@ -181,8 +181,25 @@ jobs:
               cd "Server Side"
               docker compose up -d --build --remove-orphans
               sleep 5
+              run_migrations || true
               python3 scripts/smoke_check.py --api-base http://localhost:8000 --admin-url http://localhost:3000 --user-url http://localhost:3001 --require-slo-ok || true
               exit 1
+            }
+
+            # Apply DB schema migrations. Retries while the backend/MySQL come
+            # up; fails the deploy (triggering rollback) if migrations error.
+            run_migrations() {
+              echo "⏫ Running database migrations (alembic upgrade head)..."
+              for i in $(seq 1 12); do
+                if docker compose exec -T backend alembic upgrade head; then
+                  echo "✅ Migrations applied"
+                  return 0
+                fi
+                echo "  …backend/DB not ready (attempt $i/12), retrying in 5s"
+                sleep 5
+              done
+              echo "❌ Migrations failed after retries"
+              return 1
             }
 
             git fetch origin main
@@ -191,6 +208,8 @@ jobs:
             cd "Server Side"
             docker compose up -d --build --remove-orphans
             sleep 5
+
+            run_migrations || rollback
 
             python3 scripts/smoke_check.py --api-base http://localhost:8000 --admin-url http://localhost:3000 --user-url http://localhost:3001 --require-slo-ok || rollback
 

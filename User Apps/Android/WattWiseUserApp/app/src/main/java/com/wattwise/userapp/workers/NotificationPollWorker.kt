@@ -44,10 +44,14 @@ class NotificationPollWorker @AssistedInject constructor(
                 return Result.success()
             }
 
+            // Fetch recent notifications regardless of server-side read state.
+            // Dedup is driven solely by the locally-tracked last-seen ID — if we
+            // filtered on unread_only, an alert marked read elsewhere (e.g. the
+            // web dashboard) before this 15-min cycle would never be surfaced.
             val response = apiService.getNotifications(
                 bearerToken = bearer,
-                limit = 20,
-                unreadOnly = true
+                limit = 30,
+                unreadOnly = false
             )
 
             if (!response.isSuccessful) {
@@ -57,19 +61,23 @@ class NotificationPollWorker @AssistedInject constructor(
 
             val items = response.body() ?: emptyList()
             if (items.isEmpty()) {
-                Timber.d("✅ NotificationPollWorker: no new notifications")
+                Timber.d("✅ NotificationPollWorker: no notifications")
                 return Result.success()
             }
 
             val lastSeenId = notifPrefs.lastSeenNotificationId.firstOrNull() ?: ""
             val lastSeenInt = lastSeenId.toIntOrNull() ?: 0
 
-            // Filter to only items we haven't already shown
-            val newItems = items.filter { it.id > lastSeenInt }
+            // Everything newer than the last ID we surfaced. Show oldest→newest
+            // so the status bar ordering is chronological and we never silently
+            // drop a backlog (cap is a safety valve, not normal-path truncation).
+            val newItems = items
+                .filter { it.id > lastSeenInt }
+                .sortedBy { it.id }
+                .takeLast(MAX_NOTIFICATIONS_PER_CYCLE)
             Timber.d("NotificationPollWorker: ${items.size} fetched, ${newItems.size} new")
 
-            // Show native system notification for each new item (newest first)
-            newItems.sortedByDescending { it.id }.take(3).forEach { item ->
+            newItems.forEach { item ->
                 val type = when (item.severity.uppercase()) {
                     "CRITICAL" -> "critical"
                     "WARNING"  -> "warning"
@@ -109,5 +117,10 @@ class NotificationPollWorker @AssistedInject constructor(
 
     companion object {
         const val WORK_NAME = "wattwise_notification_poll"
+
+        // Coalesce cap so a long offline backlog can't spam the status bar.
+        // Energy nudges are low-volume; in normal operation a 15-min cycle
+        // yields far fewer than this, so it never truncates the happy path.
+        private const val MAX_NOTIFICATIONS_PER_CYCLE = 15
     }
 }

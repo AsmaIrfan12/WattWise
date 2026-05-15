@@ -1,11 +1,20 @@
 """WattWise — User Decisions Router (Research Core)."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+import hmac
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
-from app.models import UserDecision, Notification, UserInteractionLog
+from app.models import (
+    UserDecision, Notification, UserInteractionLog,
+    DecisionObservedAction, Device,
+)
 from app.schemas import DecisionCreate, DecisionResponse, DecisionImpactReport
 from app.decision_tracker import DecisionTracker
 
@@ -90,6 +99,117 @@ async def get_impact_report(request: Request, db: AsyncSession = Depends(get_db)
     user_id = _get_user_id(request)
     report = await DecisionTracker.get_user_impact_report(db, user_id)
     return DecisionImpactReport(**report)
+
+
+class ObservedActionIn(BaseModel):
+    notification_id: int
+    observed_state: str                       # e.g. "off" / "on"
+    previous_state: Optional[str] = None
+    entity_id: Optional[str] = None
+    device_id: Optional[int] = None
+    source: str = "rpi_homeassistant"          # or "admin_manual"
+    observed_at: Optional[datetime] = None
+    raw_payload: Optional[dict] = None
+
+
+@router.post("/observed-action", status_code=201)
+async def record_observed_action(
+    body: ObservedActionIn,
+    x_wattwise_rpi_key: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Closed-loop endpoint: the RPi / Home Assistant bridge (or an admin tool)
+    reports the *verified* device actuation taken in response to a notification.
+
+    Auth is a shared secret header (the RPi has no JWT). This path is in
+    PUBLIC_PATHS so the JWT middleware doesn't reject it; the secret check
+    below is the actual gate. On a "save" action with no decision yet
+    recorded, a verified UserDecision is auto-created so the existing
+    impact pipeline attributes savings to a real physical action.
+    """
+    if not hmac.compare_digest(x_wattwise_rpi_key, settings.RPI_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid webhook key")
+    if body.source not in ("rpi_homeassistant", "admin_manual"):
+        raise HTTPException(status_code=422, detail="Invalid source")
+
+    notif = (await db.execute(
+        select(Notification).where(Notification.id == body.notification_id)
+    )).scalar_one_or_none()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    user_id = notif.user_id
+
+    # Resolve device — by id (ownership-checked) or by entity_id within the user's homes.
+    device_id = None
+    if body.device_id is not None:
+        dev = (await db.execute(
+            select(Device).where(Device.id == body.device_id)
+        )).scalar_one_or_none()
+        if dev:
+            device_id = dev.id
+    elif body.entity_id:
+        dev = (await db.execute(
+            select(Device).where(
+                Device.entity_id == body.entity_id, Device.is_active
+            )
+        )).scalar_one_or_none()
+        if dev:
+            device_id = dev.id
+
+    # Link to an existing decision for this notification, if any.
+    decision = (await db.execute(
+        select(UserDecision).where(
+            UserDecision.user_id == user_id,
+            UserDecision.notification_id == body.notification_id,
+        ).limit(1)
+    )).scalar_one_or_none()
+
+    # No self-report yet + the prompted save action happened → auto-close
+    # the loop with a verified decision so impact gets measured.
+    if decision is None and body.observed_state.lower() in ("off", "standby", "unplugged"):
+        decision = await DecisionTracker.record_decision(
+            db=db,
+            user_id=user_id,
+            notification_id=body.notification_id,
+            decision_type="ACCEPTED",
+            action_taken=f"verified:{body.source} switch->{body.observed_state}",
+            device_id=device_id,
+        )
+
+    obs = DecisionObservedAction(
+        notification_id=body.notification_id,
+        decision_id=decision.id if decision else None,
+        user_id=user_id,
+        device_id=device_id,
+        entity_id=body.entity_id,
+        source=body.source,
+        observed_state=body.observed_state,
+        previous_state=body.previous_state,
+        observed_at=body.observed_at or datetime.utcnow(),
+        raw_payload=body.raw_payload,
+    )
+    db.add(obs)
+    db.add(UserInteractionLog(
+        user_id=user_id,
+        interaction_type="RECORD_DECISION",
+        notification_id=body.notification_id,
+        device_id=device_id,
+        metadata_json={
+            "verified_action": True,
+            "source": body.source,
+            "observed_state": body.observed_state,
+        },
+    ))
+    await db.commit()
+    await db.refresh(obs)
+
+    return {
+        "observed_action_id": obs.id,
+        "decision_id": decision.id if decision else None,
+        "verified": True,
+        "auto_closed": decision is not None,
+    }
 
 
 @router.get("/{decision_id}", response_model=DecisionResponse)

@@ -89,7 +89,7 @@ function showLoginOverlay() {
             style="width:100%; padding:12px 16px; background:#1a2234; border:1px solid rgba(255,255,255,0.07);
             border-radius:8px; color:#f1f5f9; font-size:14px; margin-bottom:20px; font-family:inherit; box-sizing:border-box;"
             required/>
-          <button type="submit"
+          <button id="login-submit-btn" type="submit"
             style="width:100%; padding:12px; background:#3b82f6; color:#fff; border:none; border-radius:8px;
             font-size:15px; font-weight:700; cursor:pointer; font-family:inherit;">
             Sign In
@@ -102,7 +102,9 @@ function showLoginOverlay() {
   document.getElementById('login-form').addEventListener('submit', async e => {
     e.preventDefault();
     const errEl = document.getElementById('login-error');
+    const loginBtn = document.getElementById('login-submit-btn');
     errEl.textContent = '';
+    if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = 'Signing in…'; }
     try {
       const data = await api('/api/auth/login', {
         method: 'POST',
@@ -119,8 +121,7 @@ function showLoginOverlay() {
       sessionStorage.removeItem("ww_admin_token");
       errEl.textContent = error.message || "Login failed. Please check your credentials.";
     } finally {
-      loginBtn.disabled = false;
-      loginBtn.textContent = "Sign In";
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "Sign In"; }
     }
   });
 }

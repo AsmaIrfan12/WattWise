@@ -93,9 +93,15 @@ object WattWiseNotificationRouter {
      * Intended use: PendingIntent in the notification builder.
      */
     fun buildLaunchIntent(context: Context, data: Bundle?): Intent {
-        // Launch the main activity; it will pick up the URL from the intent extras
         val intent = Intent(context, Class.forName("com.wattwise.userapp.MainActivity"))
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        // Carry the payload extras (tab / screen / notification_id) through so
+        // MainActivity.handleDeepLinkIntent can route to the right WebView tab.
+        // Without this, taps from the poll worker (which has no applianceKey,
+        // so resolveDeepLinkUrl returns null) opened the app on no tab at all.
+        if (data != null) {
+            intent.putExtras(data)
+        }
         val deepLinkUrl = resolveDeepLinkUrl(data)
         if (deepLinkUrl != null) {
             intent.putExtra("deep_link_url", deepLinkUrl)

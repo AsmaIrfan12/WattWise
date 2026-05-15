@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = "admin@wattwise.co.uk"
     ADMIN_PASSWORD: str = "changeme_admin_2026"
 
+    # Shared secret the RPi / Home Assistant bridge sends in the
+    # X-WattWise-RPi-Key header to record verified device actuations.
+    RPI_WEBHOOK_SECRET: str = "changeme_rpi_webhook_2026"
+
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:5000"
 
@@ -80,10 +84,21 @@ class Settings(BaseSettings):
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
 
+    def _uk_hour(self) -> int:
+        """Current hour in UK local time (GMT/BST aware).
+
+        The peak window (16:00–19:00) is defined in UK wall-clock. The
+        container runs UTC, so a naive datetime.now() would mis-bill every
+        reading by 1h for the ~7 months of BST — corrupting the PhD
+        tariff/cost dataset and decision-impact windows.
+        """
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/London")).hour
+
     def get_current_tariff(self) -> float:
         """Return current UK tariff rate based on time of day."""
-        from datetime import datetime
-        hour = datetime.now().hour
+        hour = self._uk_hour()
         if self.ENERGY_PEAK_START_HOUR <= hour < self.ENERGY_PEAK_END_HOUR:
             return self.ENERGY_PEAK_PRICE_PER_KWH
         if 0 <= hour < 7:
@@ -91,8 +106,7 @@ class Settings(BaseSettings):
         return self.ENERGY_STANDARD_PRICE_PER_KWH
 
     def is_peak_time(self) -> bool:
-        from datetime import datetime
-        hour = datetime.now().hour
+        hour = self._uk_hour()
         return self.ENERGY_PEAK_START_HOUR <= hour < self.ENERGY_PEAK_END_HOUR
 
 

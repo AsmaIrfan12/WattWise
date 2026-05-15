@@ -1,16 +1,44 @@
 services:
+  # ── MQTT Password Bootstrap ──────────────────────────────
+  # Generates the broker password file from env into a named volume so a
+  # clean `git reset --hard` deploy never starts the broker without creds
+  # (and no plaintext secret is committed to the repo). Idempotent.
+  mosquitto-init:
+    image: eclipse-mosquitto:2
+    container_name: wattwise-mosquitto-init
+    restart: "no"
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-wattwise_backend}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?MQTT_PASSWORD must be set in .env}
+      MQTT_ADMIN_PASS: ${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}
+    volumes:
+      - mosquitto_secret:/secret
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        mosquitto_passwd -b -c /secret/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
+        mosquitto_passwd -b /secret/passwd wattwise_admin "$$MQTT_ADMIN_PASS" &&
+        chmod 0700 /secret/passwd &&
+        echo "mosquitto passwd provisioned for $$MQTT_USERNAME"
+    networks:
+      - wattwise-network
+
   # ── MQTT Broker ──────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: wattwise-mosquitto
     restart: unless-stopped
+    depends_on:
+      mosquitto-init:
+        condition: service_completed_successfully
     ports:
       - "1883:1883"   # MQTT
       - "9001:9001"   # WebSocket
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/config/acl.conf:/mosquitto/config/acl.conf:ro
-      - ./mosquitto/config/passwd:/mosquitto/config/passwd:ro
+      - mosquitto_secret:/mosquitto/secret:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     healthcheck:
@@ -280,6 +308,7 @@ volumes:
   mysql_data:
   mosquitto_data:
   mosquitto_log:
+  mosquitto_secret:
   influxdb_data:
   letsencrypt:
   certbot_webroot:

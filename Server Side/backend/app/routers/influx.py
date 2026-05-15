@@ -1,45 +1,62 @@
 """
 WattWise — InfluxDB Entity-Based Query Router
 ==============================================
-Ported from old/app.js (Node.js).
 
-Exposes direct time-series access to InfluxDB for:
-- Listing all entity_ids stored in InfluxDB
-- Fetching raw time-ranged data for any entity_id
-- Device-specific power / current / switch-state queries
+Direct time-series access to InfluxDB for device power / current / switch-state
+streams collected by the RaspberryPi MQTT bridge.
 
-These endpoints complement the MySQL-backed /api/readings/ routes
-by providing direct access to the Home Assistant entity streams
-stored in InfluxDB by the RaspberryPi MQTT collector.
+Security model
+--------------
+- All routes require a valid JWT.
+- A regular user may ONLY query entity_ids that belong to one of their own
+  active devices (entity_id / power_entity_id / switch_entity_id). Any other
+  entity_id returns 404 — a user can never read another household's telemetry.
+- An admin (is_admin=True) may query any entity_id (full-fleet visibility is a
+  product requirement for the research operator).
+- entity_id is additionally validated against a strict character whitelist and
+  is only ever passed to InfluxQL after being confirmed to exist in the owned
+  set, eliminating InfluxQL injection.
 
 Base URL: /api/influx/
-Authentication: JWT Bearer (all routes protected)
 """
 
 import logging
+import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.concurrency import run_in_threadpool
 from influxdb import InfluxDBClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
+from app.models import Device, Home
 
 logger = logging.getLogger("influx_router")
 
 router = APIRouter(prefix="/api/influx", tags=["InfluxDB (Entity)"])
 
+# entity_ids are Home Assistant identifiers: letters, digits, _ . : -
+_ENTITY_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
-# ── InfluxDB client factory ─────────────────────────────────────
+# Reused across requests — opening a new InfluxDBClient per call adds TCP/handshake
+# latency and leaks sockets under load.
+_influx_client: Optional[InfluxDBClient] = None
+
 
 def _get_influx() -> InfluxDBClient:
-    """Create a synchronous InfluxDB 1.x client from settings."""
-    return InfluxDBClient(
-        host=settings.INFLUX_HOST,
-        port=settings.INFLUX_PORT,
-        username=settings.INFLUX_USER,
-        password=settings.INFLUX_PASS,
-        database=settings.INFLUX_DB,
-    )
+    global _influx_client
+    if _influx_client is None:
+        _influx_client = InfluxDBClient(
+            host=settings.INFLUX_HOST,
+            port=settings.INFLUX_PORT,
+            username=settings.INFLUX_USER,
+            password=settings.INFLUX_PASS,
+            database=settings.INFLUX_DB,
+        )
+    return _influx_client
 
 
 def _get_user_id(request: Request) -> int:
@@ -49,70 +66,95 @@ def _get_user_id(request: Request) -> int:
     return user_id
 
 
-def _run_query(influx: InfluxDBClient, query: str) -> list[dict]:
-    """Execute an InfluxQL query and return results as a list of dicts."""
+def _is_admin(request: Request) -> bool:
+    return bool(getattr(request.state, "is_admin", False))
+
+
+async def _owned_entity_ids(db: AsyncSession, user_id: int) -> set[str]:
+    """All entity_ids (data / power / switch) for the user's active devices."""
+    result = await db.execute(
+        select(
+            Device.entity_id, Device.power_entity_id, Device.switch_entity_id
+        )
+        .join(Home, Device.home_id == Home.id)
+        .where(Home.user_id == user_id, Device.is_active)
+    )
+    owned: set[str] = set()
+    for data_id, power_id, switch_id in result.all():
+        for eid in (data_id, power_id, switch_id):
+            if eid:
+                owned.add(eid)
+    return owned
+
+
+async def _assert_entity_access(
+    db: AsyncSession, request: Request, entity_id: str
+) -> None:
+    """404 unless the caller owns this entity_id (admins bypass)."""
+    if not _ENTITY_RE.match(entity_id):
+        raise HTTPException(status_code=404, detail="Entity not found")
+    if _is_admin(request):
+        return
+    user_id = _get_user_id(request)
+    if entity_id not in await _owned_entity_ids(db, user_id):
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+
+def _run_query(query: str) -> list[dict]:
+    """Execute an InfluxQL query (blocking — call via run_in_threadpool)."""
     try:
-        result = influx.query(query)
-        rows = list(result.get_points())
-        return rows
+        result = _get_influx().query(query)
+        return list(result.get_points())
     except Exception as e:
         logger.error(f"InfluxDB query error: {e} — query: {query[:200]}")
-        raise HTTPException(status_code=503, detail=f"InfluxDB query failed: {e}")
+        raise HTTPException(status_code=503, detail="InfluxDB query failed")
 
 
 # ── Endpoints ────────────────────────────────────────────────────
 
 @router.get("/entities")
-def list_entities(request: Request):
-    """
-    List all entity_ids recorded in the InfluxDB 'state' measurement.
-    These are the Home Assistant entity IDs sent by the RaspberryPi sensor bridge.
-    """
-    _get_user_id(request)
-    influx = _get_influx()
-    rows = _run_query(influx, 'SHOW TAG VALUES FROM "state" WITH KEY = "entity_id"')
-    entity_ids = [r.get("value") or r for r in rows]
+async def list_entities(request: Request, db: AsyncSession = Depends(get_db)):
+    """List entity_ids the caller is allowed to see (own devices; admin = all)."""
+    user_id = _get_user_id(request)
+    if _is_admin(request):
+        rows = await run_in_threadpool(
+            _run_query, 'SHOW TAG VALUES FROM "state" WITH KEY = "entity_id"'
+        )
+        entity_ids = sorted({(r.get("value") or "") for r in rows if r.get("value")})
+    else:
+        entity_ids = sorted(await _owned_entity_ids(db, user_id))
     return {
-        "message": "Available entities in InfluxDB",
+        "message": "Available entities",
         "count": len(entity_ids),
         "entities": entity_ids,
     }
 
 
 @router.get("/entity/{entity_id}")
-def get_entity_data(
+async def get_entity_data(
     entity_id: str,
     request: Request,
     hours: Optional[int] = Query(default=None, ge=1, le=720),
     days: Optional[int] = Query(default=None, ge=1, le=90),
     limit: int = Query(default=200, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Fetch time-ranged raw data for a specific entity_id from InfluxDB.
-    Used for device power, current, switch state, or environmental sensor data.
+    """Time-ranged raw data for an entity_id the caller owns."""
+    await _assert_entity_access(db, request, entity_id)
 
-    Examples:
-        GET /api/influx/entity/kettle_current_consumption?hours=24
-        GET /api/influx/entity/livingsensor_temperature?days=7
-    """
-    _get_user_id(request)
-
-    # Build time range
     if days:
-        time_range = f"time > now() - {days}d"
+        time_range = f"time > now() - {int(days)}d"
     elif hours:
-        time_range = f"time > now() - {hours}h"
+        time_range = f"time > now() - {int(hours)}h"
     else:
         time_range = "time > now() - 24h"
 
-    influx = _get_influx()
     query = (
         f'SELECT * FROM "state" '
         f"WHERE entity_id = '{entity_id}' AND {time_range} "
-        f"ORDER BY time DESC LIMIT {limit}"
+        f"ORDER BY time DESC LIMIT {int(limit)}"
     )
-    data = _run_query(influx, query)
-
+    data = await run_in_threadpool(_run_query, query)
     return {
         "entity_id": entity_id,
         "time_range": time_range,
@@ -121,81 +163,72 @@ def get_entity_data(
     }
 
 
+async def _measurement_series(
+    db: AsyncSession,
+    request: Request,
+    entity_id: str,
+    measurement: str,
+    hours: int,
+    limit: int,
+) -> dict:
+    await _assert_entity_access(db, request, entity_id)
+    query = (
+        f'SELECT * FROM "{measurement}" '
+        f"WHERE entity_id = '{entity_id}' AND time > now() - {int(hours)}h "
+        f"ORDER BY time DESC LIMIT {int(limit)}"
+    )
+    data = await run_in_threadpool(_run_query, query)
+    return {
+        "entity_id": entity_id,
+        "measurement": measurement,
+        "count": len(data),
+        "data": data,
+    }
+
+
 @router.get("/device/{entity_id}/power")
-def get_entity_power(
+async def get_entity_power(
     entity_id: str,
     request: Request,
     hours: int = Query(default=24, ge=1, le=720),
     limit: int = Query(default=500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Fetch Watts (W measurement) for the given entity_id.
-    Used for power consumption time series (from Home Assistant energy sensors).
-    """
-    _get_user_id(request)
-    influx = _get_influx()
-    query = (
-        f'SELECT * FROM "W" '
-        f"WHERE entity_id = '{entity_id}' AND time > now() - {hours}h "
-        f"ORDER BY time DESC LIMIT {limit}"
-    )
-    data = _run_query(influx, query)
-    return {"entity_id": entity_id, "measurement": "W", "count": len(data), "data": data}
+    """Watts (W) for an owned entity_id."""
+    return await _measurement_series(db, request, entity_id, "W", hours, limit)
 
 
 @router.get("/device/{entity_id}/current")
-def get_entity_current(
+async def get_entity_current(
     entity_id: str,
     request: Request,
     hours: int = Query(default=24, ge=1, le=720),
     limit: int = Query(default=500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Fetch Amps (A measurement) for the given entity_id.
-    Represents electrical current drawn by a smart plug.
-    """
-    _get_user_id(request)
-    influx = _get_influx()
-    query = (
-        f'SELECT * FROM "A" '
-        f"WHERE entity_id = '{entity_id}' AND time > now() - {hours}h "
-        f"ORDER BY time DESC LIMIT {limit}"
-    )
-    data = _run_query(influx, query)
-    return {"entity_id": entity_id, "measurement": "A", "count": len(data), "data": data}
+    """Amps (A) for an owned entity_id."""
+    return await _measurement_series(db, request, entity_id, "A", hours, limit)
 
 
 @router.get("/device/{entity_id}/switch")
-def get_entity_switch(
+async def get_entity_switch(
     entity_id: str,
     request: Request,
     hours: int = Query(default=24, ge=1, le=720),
     limit: int = Query(default=500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Fetch switch state data (on/off) for the given entity_id from the 'state' measurement.
-    """
-    _get_user_id(request)
-    influx = _get_influx()
-    query = (
-        f'SELECT * FROM "state" '
-        f"WHERE entity_id = '{entity_id}' AND time > now() - {hours}h "
-        f"ORDER BY time DESC LIMIT {limit}"
-    )
-    data = _run_query(influx, query)
-    return {"entity_id": entity_id, "measurement": "state", "count": len(data), "data": data}
+    """Switch state for an owned entity_id."""
+    return await _measurement_series(db, request, entity_id, "state", hours, limit)
 
 
 @router.get("/measurements")
-def list_measurements(request: Request):
-    """
-    List all measurements available in the InfluxDB database.
-    Useful for debugging what data has been ingested from Home Assistant.
-    """
-    _get_user_id(request)
-    influx = _get_influx()
+async def list_measurements(request: Request):
+    """List InfluxDB measurement names (schema metadata, admin only)."""
+    if not _is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin only")
     try:
-        result = influx.get_list_measurements()
+        result = await run_in_threadpool(_get_influx().get_list_measurements)
         measurements = [m["name"] for m in result]
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"InfluxDB error: {e}")
@@ -203,16 +236,14 @@ def list_measurements(request: Request):
 
 
 @router.get("/health")
-def influx_health(request: Request):
-    """
-    Check InfluxDB connectivity and return database info.
-    Maps to the old https://influx.wattwiser.org/health concept.
-    """
-    _get_user_id(request)
-    influx = _get_influx()
+async def influx_health(request: Request):
+    """InfluxDB connectivity check (admin only — exposes server internals)."""
+    if not _is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin only")
     try:
-        pong = influx.ping()
-        dbs = influx.get_list_database()
+        client = _get_influx()
+        pong = await run_in_threadpool(client.ping)
+        dbs = await run_in_threadpool(client.get_list_database)
         return {
             "status": "connected",
             "influx_version": pong,
@@ -221,8 +252,4 @@ def influx_health(request: Request):
             "databases": [d["name"] for d in dbs],
         }
     except Exception as e:
-        return {
-            "status": "error",
-            "detail": str(e),
-            "host": settings.INFLUX_HOST,
-        }
+        return {"status": "error", "detail": str(e), "host": settings.INFLUX_HOST}

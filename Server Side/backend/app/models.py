@@ -415,3 +415,74 @@ class AdminAuditLog(Base):
         Index("idx_audit_admin_time", "admin_user_id", "created_at"),
         Index("idx_audit_action", "action_type", "created_at"),
     )
+
+
+# ── PERSONA CLUSTER ASSIGNMENTS (PhD research dataset) ────────
+class PersonaClusterAssignment(Base):
+    """
+    One row per user per clustering run.
+
+    This is a research artifact: it freezes the exact feature vector each
+    user was clustered on, the raw cluster label, the persona it mapped to,
+    and the run-level cluster-quality metrics (silhouette / Davies–Bouldin).
+    It lets the PhD analysis reconstruct and validate every classification
+    decision after the fact, rather than only seeing the final persona_id.
+    """
+    __tablename__ = "persona_cluster_assignments"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)          # UUID grouping a run
+    run_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    persona_id = Column(Integer, ForeignKey("personas.id", ondelete="SET NULL"), nullable=True)
+    cluster_label = Column(Integer, nullable=False)      # -1 = rule-based (Disengaged / fallback)
+    algorithm = Column(String(32), nullable=False)       # "kmeans" | "percentile_fallback"
+    silhouette = Column(Float, nullable=True)            # run-level, [-1, 1] higher = better
+    davies_bouldin = Column(Float, nullable=True)        # run-level, lower = better
+    n_samples = Column(Integer, nullable=True)           # engaged users in the run
+    features = Column(JSON, nullable=True)               # the standardised-input feature dict
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_pca_run", "run_id"),
+        Index("idx_pca_user_time", "user_id", "run_at"),
+    )
+
+
+# ── VERIFIED DEVICE ACTIONS (closed-loop research evidence) ───
+class DecisionObservedAction(Base):
+    """
+    A device actuation observed by the RPi / Home Assistant (or recorded by
+    an admin) in response to an energy notification.
+
+    This is what closes the research loop: instead of trusting the user's
+    free-text self-report, it records the *actual* switch-state transition
+    of the smart plug, time-linked to the notification that prompted it.
+    The decision-impact pipeline can then attribute energy savings to a
+    verified physical action rather than an unverified claim.
+    """
+    __tablename__ = "decision_observed_actions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    notification_id = Column(
+        BigInteger, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_id = Column(
+        BigInteger, ForeignKey("user_decisions.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    device_id = Column(Integer, ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    entity_id = Column(String(128), nullable=True)
+    source = Column(
+        Enum("rpi_homeassistant", "admin_manual"), nullable=False
+    )
+    observed_state = Column(String(32), nullable=False)   # e.g. "off" / "on"
+    previous_state = Column(String(32), nullable=True)
+    observed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    raw_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_doa_notification", "notification_id"),
+        Index("idx_doa_user_time", "user_id", "observed_at"),
+    )

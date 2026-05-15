@@ -66,7 +66,10 @@ def _configure_logging():
 _configure_logging()
 logger = logging.getLogger("main")
 
-scheduler = AsyncIOScheduler()
+# Pin the scheduler to UK wall-clock. Cron jobs like peak_reminder (15:45,
+# just before the 16:00 UK peak) and daily_report (07:00) must fire on the
+# user's clock, not the container's UTC — otherwise they drift 1h every BST.
+scheduler = AsyncIOScheduler(timezone="Europe/London")
 
 
 def _security_warnings() -> list[str]:
@@ -243,7 +246,9 @@ app.add_middleware(
 PUBLIC_PATHS = {
     "/", "/health", "/health/dependencies", "/health/slo", "/metrics", "/docs", "/openapi.json", "/redoc",
     "/api/auth/signup", "/api/auth/login", "/api/auth/forgot-password",
-    "/api/rankings/leaderboard",
+    # RPi/Home-Assistant verified-action webhook — authenticated by the
+    # X-WattWise-RPi-Key shared secret inside the endpoint, not by JWT.
+    "/api/decisions/observed-action",
 }
 
 

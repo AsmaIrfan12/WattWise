@@ -22,6 +22,9 @@ captures/
 *.apk
 *.aab
 google-services.json
+keystore.properties
+*.jks
+*.keystore
 .claude/
 # ── Docker ────────────────────────────────────────
 mosquitto/config/passwd

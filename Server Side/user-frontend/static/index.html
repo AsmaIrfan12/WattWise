@@ -833,6 +833,9 @@ function logout() {
     clearInterval(_homeRefreshTimer);
     _homeRefreshTimer = null;
   }
+  // Stop every per-device 3s live-watt poller — otherwise they keep hitting
+  // the API after logout and pile up a duplicate set on the next login.
+  Object.keys(_liveWattTimers).forEach(id => stopLiveWatts(id));
   setAuthUi(false);
   document.getElementById('av').textContent = '?';
   document.getElementById('persona-chip').style.display = 'none';
@@ -866,7 +869,13 @@ async function init() {
     refreshNotifBadge();
     if (_homeRefreshTimer) clearInterval(_homeRefreshTimer);
     _homeRefreshTimer = setInterval(() => {
-      if (_activeSection === 'home' && token) loadHome();
+      if (!token || document.hidden) return;
+      // Auto-refresh whichever data tab is open so the user never sees stale
+      // numbers. 'energy' is excluded because it's driven by the period/date
+      // picker (re-running would reset the user's selected range); 'settings'
+      // is a form, not a data view.
+      if (_activeSection === 'energy' || _activeSection === 'settings') return;
+      loaders[_activeSection]?.();
     }, 30_000);
     populateGoalDeviceDropdown();
   } catch {
@@ -917,6 +926,7 @@ async function populateGoalDeviceDropdown() {
 // ── HOME ──────────────────────────────────────────────────────
 async function loadHome() {
   if (!homeId) return;
+  let homeDaily = [];   // function-scoped: used by bill prediction AND the trend chart
   try {
     const data = await apiFetch('/readings/home/' + homeId + '/today');
     document.getElementById('h-kwh').textContent = (data.total_kwh || 0).toFixed(2) + ' kWh';
@@ -929,28 +939,15 @@ async function loadHome() {
     document.getElementById('peak-badge').style.display = isPeak ? 'inline-block' : 'none';
     document.getElementById('h-tariff-label').textContent = tariffP + 'p per kWh';
 
-    // Bill prediction — fetch 7-day history for rolling average
+    // Bill prediction + 7-day trend share ONE whole-home daily call
+    // (previously this was one request per device, every 30s refresh).
     try {
-      const devs = data.devices || [];
-      if (devs.length > 0) {
-        const allDailies = await Promise.all(
-          devs.map(d => apiFetch(`/readings/${d.device_id}/daily?days=7`).catch(() => []))
-        );
-        const dayCosts = {};
-        allDailies.forEach(daily => {
-          (daily || []).forEach(row => {
-            if (!dayCosts[row.day_date]) dayCosts[row.day_date] = 0;
-            dayCosts[row.day_date] += (row.estimated_cost_gbp || (row.total_kwh || 0) * 0.27);
-          });
-        });
-        const vals = Object.values(dayCosts);
-        const avgDailyCost = vals.length >= 2
-          ? vals.reduce((a, b) => a + b, 0) / vals.length
-          : data.total_cost_gbp || 0;
-        buildBillPrediction(data, avgDailyCost);
-      } else {
-        buildBillPrediction(data, null);
-      }
+      homeDaily = await apiFetch('/readings/home/' + homeId + '/daily?days=7') || [];
+      const costs = homeDaily.map(r => r.estimated_cost_gbp || (r.total_kwh || 0) * 0.27);
+      const avgDailyCost = costs.length >= 2
+        ? costs.reduce((a, b) => a + b, 0) / costs.length
+        : data.total_cost_gbp || 0;
+      buildBillPrediction(data, costs.length >= 2 ? avgDailyCost : null);
     } catch {
       buildBillPrediction(data, null);
     }
@@ -976,13 +973,12 @@ async function loadHome() {
     }
   } catch (e) { console.warn('Home load:', e.message); }
 
-  // 7-day trend
+  // 7-day trend — reuse the whole-home daily already fetched above
+  // (no extra device-list or per-device request).
   try {
-    const devs = await apiFetch('/homes/' + homeId + '/devices');
-    if (devs?.length) {
-      const daily = await apiFetch('/readings/' + devs[0].id + '/daily?days=7');
-      const labels = daily.map(d => d.day_date);
-      const vals = daily.map(d => d.total_kwh || 0);
+    if (homeDaily.length) {
+      const labels = homeDaily.map(d => d.day_date);
+      const vals = homeDaily.map(d => d.total_kwh || 0);
       destroyChart('trendChart');
       const ctx = document.getElementById('trendChart');
       _charts.trendChart = new Chart(ctx, {
@@ -1140,35 +1136,30 @@ async function loadEnergy() {
 
   let queryParam;
   let chartTitle;
+  let periodLabel;
   if (_energyPeriod === 'custom') {
     const s = document.getElementById('range-start').value;
     const e = document.getElementById('range-end').value;
     queryParam = (s && e) ? `start_date=${s}&end_date=${e}` : 'days=7';
     chartTitle = (s && e) ? `Energy Usage (${s} → ${e})` : 'Energy Usage (Last 7 days)';
+    periodLabel = (s && e) ? `${s} → ${e}` : 'last 7 days';
   } else {
     const days = { daily: 1, '7d': 7, '30d': 30 }[_energyPeriod] || 7;
     queryParam = `days=${days}`;
     chartTitle = `Energy Usage (Last ${days} day${days > 1 ? 's' : ''})`;
+    periodLabel = `${days} day${days > 1 ? 's' : ''}`;
   }
   document.getElementById('energy-chart-title').textContent = chartTitle;
 
   try {
-    const devs = await apiFetch('/homes/' + homeId + '/devices');
-    if (!devs?.length) return;
+    // Single whole-home aggregate (was: device list + one daily call per device)
+    const rows = await apiFetch(`/readings/home/${homeId}/daily?${queryParam}`) || [];
 
-    // Fetch daily data for each device
-    const allDailies = await Promise.all(
-      devs.map(d => apiFetch(`/readings/${d.id}/daily?${queryParam}`).catch(() => []))
-    );
-
-    // Aggregate across devices by date
     const dateMap = {};
-    allDailies.forEach((daily, i) => {
-      (daily || []).forEach(row => {
-        if (!dateMap[row.day_date]) dateMap[row.day_date] = { kwh: 0, cost: 0 };
-        dateMap[row.day_date].kwh += (row.total_kwh || 0);
-        dateMap[row.day_date].cost += (row.estimated_cost_gbp || (row.total_kwh || 0) * 0.27);
-      });
+    rows.forEach(row => {
+      if (!dateMap[row.day_date]) dateMap[row.day_date] = { kwh: 0, cost: 0 };
+      dateMap[row.day_date].kwh += (row.total_kwh || 0);
+      dateMap[row.day_date].cost += (row.estimated_cost_gbp || (row.total_kwh || 0) * 0.27);
     });
 
     const sortedDates = Object.keys(dateMap).sort();
@@ -1215,8 +1206,8 @@ async function loadEnergy() {
     const avgKwh = totalKwh / (kwhVals.length || 1);
     const peakDay = sortedDates[kwhVals.indexOf(Math.max(...kwhVals))] || '—';
     document.getElementById('energy-summary-stats').innerHTML = `
-      <div class="kpi kpi-g"><div class="kpi-label">Total kWh</div><div class="kpi-val">${totalKwh.toFixed(2)}</div><div class="kpi-sub">${days} days</div></div>
-      <div class="kpi kpi-b"><div class="kpi-label">Total Cost</div><div class="kpi-val">£${totalCost.toFixed(2)}</div><div class="kpi-sub">${days} days</div></div>
+      <div class="kpi kpi-g"><div class="kpi-label">Total kWh</div><div class="kpi-val">${totalKwh.toFixed(2)}</div><div class="kpi-sub">${periodLabel}</div></div>
+      <div class="kpi kpi-b"><div class="kpi-label">Total Cost</div><div class="kpi-val">£${totalCost.toFixed(2)}</div><div class="kpi-sub">${periodLabel}</div></div>
       <div class="kpi kpi-a"><div class="kpi-label">Daily Avg</div><div class="kpi-val">${avgKwh.toFixed(2)}</div><div class="kpi-sub">kWh/day</div></div>
       <div class="kpi kpi-r"><div class="kpi-label">Peak Day</div><div class="kpi-val" style="font-size:1rem">${peakDay}</div><div class="kpi-sub">${Math.max(...kwhVals).toFixed(2)} kWh</div></div>`;
 
@@ -1708,16 +1699,25 @@ async function loadLeaderboard() {
   const period = document.getElementById('lb-period')?.value || 'DAILY';
   try {
     const lb = await apiFetch('/rankings/leaderboard?period=' + period);
-    const myHomeId = homeId;
-    document.getElementById('leaderboard').innerHTML = lb?.leaderboard?.slice(0, 10).map(r => {
+    const rows = lb?.leaderboard || [];
+    const renderRow = r => {
       const rankColour = r.rank <= 1 ? '#f59e0b' : r.rank <= 3 ? '#94a3b8' : 'var(--mu)';
-      const isMe = false; // Would need user's home_id comparison
-      return `<div class="lb-row ${isMe ? 'lb-me' : ''}">
+      // Peers are anonymised server-side (no names / raw kWh). is_me flags
+      // the caller's own row so they can spot themselves in the community.
+      return `<div class="lb-row ${r.is_me ? 'lb-me' : ''}">
         <div class="lb-rank" style="color:${rankColour}">${r.rank <= 3 ? ['🥇','🥈','🥉'][r.rank-1] : '#' + r.rank}</div>
-        <div style="flex:1"><div class="lb-name">${san(r.home_name)}</div><div class="lb-kwh">${(r.total_kwh || 0).toFixed(2)} kWh</div></div>
+        <div style="flex:1"><div class="lb-name">${san(r.label || ('Home #' + r.rank))}</div>
+          <div class="lb-kwh">Percentile ${(r.percentile || 0).toFixed(0)}</div></div>
         <div class="lb-score" style="color:var(--green)">${(r.overall_score || 0).toFixed(0)}</div>
       </div>`;
-    }).join('') || '<div class="empty">No ranking data for this period</div>';
+    };
+    let html = rows.slice(0, 10).map(renderRow).join('');
+    // Always show the user their own standing, even if outside the top 10.
+    if (lb?.you && !rows.slice(0, 10).some(r => r.is_me)) {
+      html += `<div class="lb-row" style="opacity:.6;font-size:.8rem;text-align:center;padding:4px">⋯</div>` + renderRow(lb.you);
+    }
+    document.getElementById('leaderboard').innerHTML =
+      html || '<div class="empty">No ranking data for this period</div>';
   } catch {}
 }
 

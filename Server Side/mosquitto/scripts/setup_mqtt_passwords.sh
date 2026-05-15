@@ -12,8 +12,16 @@
 
 set -euo pipefail
 
-PASSWD_FILE="./mosquitto/config/passwd"
+# The broker reads its password file from the `mosquitto_secret` named volume
+# (provisioned by the `mosquitto-init` compose service). All writes therefore
+# happen *inside* a container that mounts that volume rw — never on a host file.
+PASSWD_FILE="/secret/passwd"
 ACL_FILE="./mosquitto/config/acl.conf"
+
+# Run mosquitto_passwd against the secret volume via the init service.
+passwd_in_volume() {
+    docker compose run --rm --no-deps --entrypoint mosquitto_passwd mosquitto-init "$@"
+}
 
 # Load MQTT credentials from .env
 if [ -f ".env" ]; then
@@ -26,13 +34,10 @@ ADMIN_PASS="${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}"
 
 case "${1:-init}" in
   init)
-    echo "🔑 Creating MQTT password file..."
-    # Create/reset passwd file
-    touch "$PASSWD_FILE"
-    # Add backend user
-    docker compose run --rm mosquitto mosquitto_passwd -b "$PASSWD_FILE" "$BACKEND_USER" "$BACKEND_PASS"
-    # Add admin monitor user
-    docker compose run --rm mosquitto mosquitto_passwd -b "$PASSWD_FILE" "wattwise_admin" "$ADMIN_PASS"
+    echo "🔑 Creating MQTT password file in mosquitto_secret volume..."
+    # -c (re)creates the file with the backend user, then add admin monitor.
+    passwd_in_volume -b -c "$PASSWD_FILE" "$BACKEND_USER" "$BACKEND_PASS"
+    passwd_in_volume -b "$PASSWD_FILE" "wattwise_admin" "$ADMIN_PASS"
     echo "✅ MQTT authentication configured"
     echo "   Backend user: $BACKEND_USER"
     echo "   Admin user:   wattwise_admin"
@@ -51,7 +56,7 @@ case "${1:-init}" in
     HOME_PASS=$(openssl rand -base64 24)
 
     echo "🏠 Adding MQTT user for home: $HOME_ID"
-    docker compose run --rm mosquitto mosquitto_passwd -b "$PASSWD_FILE" "$HOME_USER" "$HOME_PASS"
+    passwd_in_volume -b "$PASSWD_FILE" "$HOME_USER" "$HOME_PASS"
 
     # Append ACL entry
     cat >> "$ACL_FILE" << EOF
@@ -71,8 +76,9 @@ EOF
     ;;
 
   list)
-    echo "📋 MQTT password file contents:"
-    cat "$PASSWD_FILE" 2>/dev/null || echo "(empty or not found)"
+    echo "📋 MQTT password file contents (usernames):"
+    docker compose run --rm --no-deps --entrypoint sh mosquitto-init \
+      -c "cut -d: -f1 $PASSWD_FILE 2>/dev/null" || echo "(empty or not found)"
     ;;
 
   *)

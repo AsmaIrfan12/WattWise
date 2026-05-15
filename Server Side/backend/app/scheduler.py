@@ -321,6 +321,7 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 Home.id.label("home_id"),
                 Home.user_id,
                 Home.home_name,
+                Home.num_occupants,
                 func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
                 func.sum(HomeDailyTotal.total_cost_gbp).label("total_cost"),
             )
@@ -329,7 +330,7 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 HomeDailyTotal.day_date >= period_start,
                 HomeDailyTotal.day_date <= period_end,
             )
-            .group_by(Home.id, Home.user_id, Home.home_name)
+            .group_by(Home.id, Home.user_id, Home.home_name, Home.num_occupants)
             .order_by(func.sum(HomeDailyTotal.total_kwh).asc())  # Lower usage = better
         )
         rows = result.all()
@@ -338,48 +339,61 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
         # Period length in days — used to scale per-day goals up to the period
         period_days = (period_end - period_start).days + 1
 
+        # Batch the per-home lookups that used to be N+1 queries inside the loop
+        # (goal, decision score, existing ranking) into one query each.
+        from app.models import UserDecision
+        user_ids = [r.user_id for r in rows]
+
+        goal_rows = await db.execute(
+            select(User.id, User.daily_energy_goal_kwh).where(User.id.in_(user_ids))
+        )
+        goal_by_user = {uid: goal for uid, goal in goal_rows.all()}
+
+        dec_rows = await db.execute(
+            select(
+                UserDecision.user_id,
+                func.avg(UserDecision.effectiveness_score),
+            )
+            .where(
+                UserDecision.user_id.in_(user_ids),
+                func.date(UserDecision.created_at) >= period_start,
+                func.date(UserDecision.created_at) <= period_end,
+            )
+            .group_by(UserDecision.user_id)
+        )
+        decision_by_user = {uid: score for uid, score in dec_rows.all()}
+
+        existing_rows = await db.execute(
+            select(EnergyRanking).where(
+                EnergyRanking.period_type == period_type,
+                EnergyRanking.period_start == period_start,
+                EnergyRanking.user_id.in_(user_ids),
+            )
+        )
+        ranking_by_user = {r.user_id: r for r in existing_rows.scalars().all()}
+
         for rank, hdt in enumerate(rows, start=1):
             try:
-                home_result = await db.execute(select(Home).where(Home.id == hdt.home_id))
-                home_obj = home_result.scalar_one_or_none()
-                occupants = max((home_obj.num_occupants if home_obj else 1) or 1, 1)
+                occupants = max((hdt.num_occupants or 1), 1)
                 # Per-occupant per-day usage normalises across home size + period length
                 kwh_per_person_per_day = float(hdt.total_kwh) / occupants / max(period_days, 1)
 
                 # Score: 100 at 0 kWh/person/day, drops 10pts per kWh/person/day
                 eff_score = max(0.0, min(100.0, 100.0 - (kwh_per_person_per_day * 10.0)))
 
-                user_result = await db.execute(select(User).where(User.id == hdt.user_id))
-                user = user_result.scalar_one_or_none()
-                daily_goal = user.daily_energy_goal_kwh if user else None
+                daily_goal = goal_by_user.get(hdt.user_id)
                 if daily_goal and daily_goal > 0:
                     period_goal = daily_goal * period_days
                     adherence = max(0.0, min(100.0, (period_goal / max(float(hdt.total_kwh), 0.001)) * 100.0))
                 else:
                     adherence = 70.0  # Default when no goal set
 
-                # Decision response score within the period
-                from app.models import UserDecision
-                dec_result = await db.execute(
-                    select(func.avg(UserDecision.effectiveness_score)).where(
-                        UserDecision.user_id == hdt.user_id,
-                        func.date(UserDecision.created_at) >= period_start,
-                        func.date(UserDecision.created_at) <= period_end,
-                    )
-                )
-                avg_decision_score = dec_result.scalar() or 70.0
+                avg_decision_score = decision_by_user.get(hdt.user_id) or 70.0
 
                 overall = (eff_score * 0.4 + adherence * 0.35 + float(avg_decision_score) * 0.25)
                 percentile = ((total_users - rank) / max(total_users - 1, 1)) * 100
 
-                existing = await db.execute(
-                    select(EnergyRanking).where(
-                        EnergyRanking.user_id == hdt.user_id,
-                        EnergyRanking.period_type == period_type,
-                        EnergyRanking.period_start == period_start,
-                    )
-                )
-                ranking = existing.scalar_one_or_none()
+                ranking = ranking_by_user.get(hdt.user_id)
                 if ranking:
                     ranking.overall_score = round(overall, 1)
                     ranking.rank_position = rank

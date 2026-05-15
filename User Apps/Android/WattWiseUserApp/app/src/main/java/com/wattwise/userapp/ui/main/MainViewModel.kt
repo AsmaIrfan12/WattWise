@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.wattwise.userapp.data.local.SecureTokenStore
 import com.wattwise.userapp.data.repository.AuthRepository
 import com.wattwise.userapp.data.repository.ServerRepository
+import com.wattwise.userapp.di.DeepLinkBus
 import com.wattwise.userapp.domain.model.ConnectivityStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.combine
@@ -28,6 +29,7 @@ import javax.inject.Inject
 class MainViewModel @Inject constructor(
     private val repository: ServerRepository,
     private val authRepository: AuthRepository,
+    private val deepLinkBus: DeepLinkBus,
     val secureTokenStore: SecureTokenStore
 ) : ViewModel() {
 
@@ -83,6 +85,22 @@ class MainViewModel @Inject constructor(
     private val _pendingDeepLinkTab = MutableStateFlow<String?>(null)
     val pendingDeepLinkTab: StateFlow<String?> = _pendingDeepLinkTab.asStateFlow()
 
+    init {
+        // MainActivity publishes notification-tap / URI deep links here. It
+        // resolves a MainViewModel from a different ViewModelStore than the one
+        // MainScreen observes, so the singleton bus bridges that gap (and
+        // survives cold start, where this VM doesn't exist when the intent
+        // first arrives).
+        viewModelScope.launch {
+            deepLinkBus.pendingTab.collect { tab ->
+                if (!tab.isNullOrBlank()) {
+                    Timber.d("🔗 Deep-link received from bus: $tab")
+                    _pendingDeepLinkTab.value = tab
+                }
+            }
+        }
+    }
+
     fun handleDeepLink(tab: String) {
         Timber.d("🔗 Deep-link queued: $tab")
         _pendingDeepLinkTab.value = tab
@@ -90,6 +108,7 @@ class MainViewModel @Inject constructor(
 
     fun deepLinkConsumed() {
         _pendingDeepLinkTab.value = null
+        deepLinkBus.consume()
     }
 
     // ── Logout ────────────────────────────────────────────────────────────

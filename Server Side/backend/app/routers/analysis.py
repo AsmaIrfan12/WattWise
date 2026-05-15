@@ -135,11 +135,22 @@ async def get_my_rankings(
 
 @router.get("/rankings/leaderboard")
 async def get_leaderboard(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     period: str = Query(default="DAILY", pattern="^(DAILY|WEEKLY|MONTHLY)$"),
     date_str: Optional[str] = Query(default=None),
 ):
-    """Get the community leaderboard for a given period."""
+    """
+    Community leaderboard for a period.
+
+    Privacy: requires auth (no longer a public path) and is fully
+    anonymised — peers appear only as "Home #<rank>" with their score and
+    percentile. Other households' names and raw kWh are NEVER returned; a
+    user may see only their *position* relative to the community plus their
+    own row (flagged is_me, and surfaced as `you` even if outside the top).
+    """
+    user_id = _get_user_id(request)
+
     if date_str:
         target_date = date.fromisoformat(date_str)
     else:
@@ -147,28 +158,43 @@ async def get_leaderboard(
 
     result = await db.execute(
         select(EnergyRanking)
-        .options(joinedload(EnergyRanking.home))
         .where(EnergyRanking.period_type == period, EnergyRanking.period_start == target_date)
         .order_by(EnergyRanking.rank_position.asc())
         .limit(50)
     )
     ranking_rows = result.scalars().all()
 
+    def _row(r):
+        is_me = (r.user_id == user_id)
+        return {
+            "rank": r.rank_position,
+            "label": "You" if is_me else f"Home #{r.rank_position}",
+            "overall_score": r.overall_score,
+            "efficiency_score": r.efficiency_score,
+            "percentile": r.percentile,
+            "is_me": is_me,
+            "period": target_date.isoformat(),
+        }
+
+    leaderboard = [_row(r) for r in ranking_rows]
+
+    # The caller's own standing for this period, even if outside the top 50.
+    me_row = next((row for row in leaderboard if row["is_me"]), None)
+    if me_row is None:
+        own = (await db.execute(
+            select(EnergyRanking).where(
+                EnergyRanking.user_id == user_id,
+                EnergyRanking.period_type == period,
+                EnergyRanking.period_start == target_date,
+            )
+        )).scalar_one_or_none()
+        me_row = _row(own) if own else None
+
     return {
         "period": period,
         "date": target_date.isoformat(),
-        "leaderboard": [
-            {
-                "rank": r.rank_position,
-                "home_name": r.home.home_name if r.home else "Home",
-                "overall_score": r.overall_score,
-                "efficiency_score": r.efficiency_score,
-                "total_kwh": r.total_kwh,
-                "percentile": r.percentile,
-                "period": target_date.isoformat(),
-            }
-            for r in ranking_rows
-        ],
+        "leaderboard": leaderboard,
+        "you": me_row,
     }
 
 

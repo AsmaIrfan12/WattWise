@@ -11,6 +11,7 @@ Fixes applied:
 - Duplicate-reading guard (same device + timestamp within 5 s)
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -28,6 +29,12 @@ logger = logging.getLogger("mqtt_client")
 
 _mqtt_client: mqtt.Client | None = None
 _mqtt_connected: bool = False
+
+# The asyncio loop running the FastAPI app. paho's on_message fires on the MQTT
+# network thread, NOT this loop's thread — so MySQL writes must be handed back
+# via run_coroutine_threadsafe. Captured in start_mqtt() (called inside the
+# async lifespan, i.e. on the loop thread).
+_loop: asyncio.AbstractEventLoop | None = None
 
 # ── $SYS broker stats cache ───────────────────────────────────
 # Mosquitto publishes broker telemetry on $SYS/broker/* topics. We subscribe
@@ -184,19 +191,22 @@ def on_message(client, userdata, msg):
         # Write to InfluxDB for time-series storage
         _write_to_influx(entity_id, power_watts, current_amps, voltage_volts, energy_kwh, recorded_at)
 
-        # Schedule MySQL write (MQTT callback is sync — use asyncio.ensure_future)
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(
-                    _write_reading_to_db(
-                        entity_id, power_watts, current_amps,
-                        voltage_volts, energy_kwh, switch_state, recorded_at
-                    )
-                )
-        except RuntimeError:
-            pass
+        # Hand the MySQL write back to the app's event loop. on_message runs on
+        # paho's network thread, so this must be threadsafe — ensure_future here
+        # would silently drop the write (wrong thread / no running loop).
+        if _loop is not None and not _loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                _write_reading_to_db(
+                    entity_id, power_watts, current_amps,
+                    voltage_volts, energy_kwh, switch_state, recorded_at
+                ),
+                _loop,
+            )
+        else:
+            logger.error(
+                "Event loop unavailable — dropping MySQL write for %s "
+                "(InfluxDB write still attempted above)", entity_id
+            )
 
     except Exception as e:
         logger.error("Error processing MQTT message: %s", e, exc_info=True)
@@ -290,7 +300,11 @@ async def _write_reading_to_db(
 # ── Lifecycle ─────────────────────────────────────────────────
 
 def start_mqtt():
-    global _mqtt_client
+    global _mqtt_client, _loop
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _loop = asyncio.get_event_loop()
     import uuid
     client_id = f"wattwise-backend-{uuid.uuid4().hex[:8]}"
     _mqtt_client = mqtt.Client(client_id=client_id, clean_session=True)

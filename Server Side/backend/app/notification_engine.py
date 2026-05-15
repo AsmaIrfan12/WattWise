@@ -413,7 +413,9 @@ class NotificationEngine:
             database=settings.INFLUX_DB,
         )
 
-        def _latest_sensor(measurement: str, entity_id: str) -> Optional[float]:
+        import asyncio
+
+        def _query_latest(measurement: str, entity_id: str) -> Optional[float]:
             try:
                 result = influx.query(
                     f'SELECT * FROM "{measurement}" WHERE entity_id = \'{entity_id}\' '
@@ -423,6 +425,11 @@ class NotificationEngine:
                 return float(pts[0]["value"]) if pts else None
             except Exception:
                 return None
+
+        # Blocking InfluxDB I/O — keep it off the event loop so the scheduler
+        # (and the whole API) isn't stalled while this 2-hourly job runs.
+        async def _latest_sensor(measurement: str, entity_id: str) -> Optional[float]:
+            return await asyncio.to_thread(_query_latest, measurement, entity_id)
 
         today = date.today()
         users_result = await db.execute(
@@ -446,9 +453,9 @@ class NotificationEngine:
                     room_conditions: dict[str, dict] = {}
                     for room in rooms:
                         base = room.entity_id or room.name.lower().replace(" ", "")
-                        temp = _latest_sensor("°C", f"{base}_temperature")
-                        hum = _latest_sensor("%", f"{base}_humidity")
-                        pres = _latest_sensor("hPa", f"{base}_pressure")
+                        temp = await _latest_sensor("°C", f"{base}_temperature")
+                        hum = await _latest_sensor("%", f"{base}_humidity")
+                        pres = await _latest_sensor("hPa", f"{base}_pressure")
                         room_conditions[room.name.lower()] = {
                             "temperature": temp or 20.0,
                             "humidity": hum or 50.0,

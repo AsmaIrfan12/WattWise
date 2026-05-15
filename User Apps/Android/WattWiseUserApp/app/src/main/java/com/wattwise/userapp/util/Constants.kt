@@ -37,7 +37,6 @@ object Constants {
     const val API_DECISIONS      = "/api/decisions"
     const val API_RANKINGS       = "/api/rankings/me"
     const val API_LEADERBOARD    = "/api/rankings/leaderboard"
-    const val API_PUSH_TOKEN     = "/api/auth/push-token"
     const val API_HEALTH         = "/health"
 
     // ── New Endpoints (migrated from old backend) ─────────────────

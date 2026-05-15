@@ -34,16 +34,6 @@ interface WattWiseAuthApi {
     ): Response<Map<String, Any>>
 
     /**
-     * POST /api/auth/push-token
-     * Registers/updates the Expo push token for this user.
-     */
-    @POST("/api/auth/push-token")
-    suspend fun updatePushToken(
-        @Header("Authorization") bearerToken: String,
-        @Body body: Map<String, String>
-    ): Response<Map<String, Any>>
-
-    /**
      * POST /api/auth/logout  (optional server-side invalidation)
      */
     @POST("/api/auth/logout")

@@ -23,6 +23,14 @@ def _get_user_id(request: Request) -> int:
     return user_id
 
 
+async def _verify_home_access(db: AsyncSession, home_id: int, user_id: int) -> None:
+    result = await db.execute(
+        select(Home.id).where(Home.id == home_id, Home.user_id == user_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Home not found")
+
+
 async def _verify_device_access(db: AsyncSession, device_id: int, user_id: int) -> Device:
     result = await db.execute(
         select(Device).join(Home, Device.home_id == Home.id)
@@ -230,6 +238,54 @@ async def get_home_today(home_id: int, request: Request, db: AsyncSession = Depe
         "is_peak_time": settings.is_peak_time(),
         "devices": summary,
     }
+
+
+@router.get("/home/{home_id}/daily")
+async def get_home_daily(
+    home_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=7, ge=1, le=365),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+):
+    """
+    Per-day energy totals for the whole home in a SINGLE grouped query.
+
+    Replaces the dashboard's previous N+1 pattern (one /readings/{device}/daily
+    call per device, every refresh) — collapses 6–12 requests into one.
+    """
+    user_id = _get_user_id(request)
+    await _verify_home_access(db, home_id, user_id)
+
+    if start_date and end_date:
+        since, until = start_date, end_date
+    else:
+        until = date.today()
+        since = until - timedelta(days=days)
+
+    result = await db.execute(
+        select(
+            DailySummary.day_date,
+            func.sum(DailySummary.total_kwh).label("total_kwh"),
+            func.sum(DailySummary.estimated_cost_gbp).label("estimated_cost_gbp"),
+        )
+        .where(
+            DailySummary.home_id == home_id,
+            DailySummary.day_date >= since,
+            DailySummary.day_date <= until,
+        )
+        .group_by(DailySummary.day_date)
+        .order_by(DailySummary.day_date.asc())
+    )
+    return [
+        {
+            "day_date": row.day_date.isoformat(),
+            "total_kwh": round(row.total_kwh or 0, 3),
+            "estimated_cost_gbp": round(row.estimated_cost_gbp or 0, 3),
+        }
+        for row in result.all()
+    ]
 
 
 @router.get("/{device_id}/live")

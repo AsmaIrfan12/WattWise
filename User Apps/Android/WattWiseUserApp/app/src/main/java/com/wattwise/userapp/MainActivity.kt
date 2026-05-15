@@ -1,22 +1,27 @@
 package com.wattwise.userapp
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.lifecycle.ViewModelProvider
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.navigation.compose.rememberNavController
-import com.wattwise.userapp.ui.main.MainViewModel
+import com.wattwise.userapp.di.DeepLinkBus
 import com.wattwise.userapp.ui.navigation.WattWiseNavGraph
 import com.wattwise.userapp.ui.theme.WattWiseTheme
 import com.wattwise.userapp.util.Constants
 import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
+import javax.inject.Inject
 
 /**
  * Single Activity hosting the entire app via Jetpack Navigation for Compose.
@@ -33,12 +38,20 @@ import timber.log.Timber
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    @Inject lateinit var deepLinkBus: DeepLinkBus
+
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Timber.d("POST_NOTIFICATIONS permission granted=$granted")
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Notification channels are also created in WattWiseApplication,
         // but we recreate here as a safety net for older OS upgrades.
         createNotificationChannels()
+        maybeRequestNotificationPermission()
 
         enableEdgeToEdge()
 
@@ -91,12 +104,19 @@ class MainActivity : ComponentActivity() {
 
         if (!tab.isNullOrBlank()) {
             Timber.d("🔗 MainActivity deep-link: tab=$tab")
-            // The MainViewModel is shared with MainScreen via Hilt — queue the tab
-            try {
-                val vm = ViewModelProvider(this)[MainViewModel::class.java]
-                vm.handleDeepLink(tab)
-            } catch (e: Exception) {
-                Timber.w(e, "Could not route deep-link (MainViewModel not yet created)")
+            // Publish through the singleton bus — MainScreen's ViewModel lives
+            // in a different ViewModelStore and may not exist yet on cold start.
+            deepLinkBus.publish(tab)
+        }
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
     }
