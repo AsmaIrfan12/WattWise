@@ -37,16 +37,37 @@ logger = logging.getLogger("wattwise.publisher")
 
 # ── Config Loader ──────────────────────────────────────────────────────────────
 def load_config(path: str = "/etc/wattwise/publisher.yaml") -> dict:
-    """Load YAML config file."""
+    """Load and validate YAML config file. Exits loudly on missing credentials."""
     try:
         with open(path, "r") as f:
             cfg = yaml.safe_load(f)
-        logger.info(f"✅ Config loaded from {path}")
-        return cfg
     except FileNotFoundError:
         logger.error(f"Config file not found: {path}")
         logger.info("Copy rpi_publisher_config.yaml to /etc/wattwise/publisher.yaml")
         sys.exit(1)
+
+    # Credential guard — refuse to start with blank or placeholder values
+    mqtt_cfg = cfg.get("mqtt", {})
+    username = (mqtt_cfg.get("username") or "").strip()
+    password = (mqtt_cfg.get("password") or "").strip()
+
+    errors = []
+    if not username:
+        errors.append("mqtt.username is blank — set it to your assigned home ID (e.g. home_003)")
+    if not password or password == "REPLACE_WITH_YOUR_MQTT_PASSWORD":
+        errors.append("mqtt.password is blank or still contains the placeholder — set the password issued by the researcher")
+
+    if errors:
+        logger.error("=" * 60)
+        logger.error("CONFIGURATION ERROR — publisher cannot start:")
+        for e in errors:
+            logger.error(f"  • {e}")
+        logger.error(f"Edit {path} and fill in your credentials.")
+        logger.error("=" * 60)
+        sys.exit(1)
+
+    logger.info(f"✅ Config loaded from {path} (home_id={cfg.get('home', {}).get('id')}, mqtt_user={username})")
+    return cfg
 
 
 # ── InfluxDB Reader ────────────────────────────────────────────────────────────

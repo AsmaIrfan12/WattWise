@@ -7,17 +7,47 @@ services:
     environment:
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
-      - MQTT_PI_PASSWORD=${MQTT_PI_PASSWORD:-WattWise_RPi_Dev_2026}
+      - MQTT_ADMIN_PASS=${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}
+      - MQTT_HOME_001_PASS=${MQTT_HOME_001_PASS:-WW_Home001_RPi_2026!}
+      - MQTT_HOME_002_PASS=${MQTT_HOME_002_PASS:-WW_Home002_RPi_2026!}
+      - MQTT_HOME_003_PASS=${MQTT_HOME_003_PASS:-WW_Home003_RPi_2026!}
+      - MQTT_HOME_004_PASS=${MQTT_HOME_004_PASS:-WW_Home004_RPi_2026!}
+      - MQTT_HOME_005_PASS=${MQTT_HOME_005_PASS:-WW_Home005_RPi_2026!}
+      - MQTT_HOME_006_PASS=${MQTT_HOME_006_PASS:-WW_Home006_RPi_2026!}
+      - MQTT_HOME_007_PASS=${MQTT_HOME_007_PASS:-WW_Home007_RPi_2026!}
+      - MQTT_HOME_008_PASS=${MQTT_HOME_008_PASS:-WW_Home008_RPi_2026!}
+      - MQTT_HOME_009_PASS=${MQTT_HOME_009_PASS:-WW_Home009_RPi_2026!}
+      - MQTT_HOME_010_PASS=${MQTT_HOME_010_PASS:-WW_Home010_RPi_2026!}
+      - MQTT_HOME_011_PASS=${MQTT_HOME_011_PASS:-WW_Home011_RPi_2026!}
+      - MQTT_HOME_012_PASS=${MQTT_HOME_012_PASS:-WW_Home012_RPi_2026!}
+      - MQTT_HOME_013_PASS=${MQTT_HOME_013_PASS:-WW_Home013_RPi_2026!}
+      - MQTT_HOME_014_PASS=${MQTT_HOME_014_PASS:-WW_Home014_RPi_2026!}
+      - MQTT_HOME_015_PASS=${MQTT_HOME_015_PASS:-WW_Home015_RPi_2026!}
     volumes:
       - mosquitto_passwd_vol:/mosquitto/secret
     entrypoint: >
       sh -c "
         rm -f /mosquitto/secret/passwd &&
         mosquitto_passwd -b -c /mosquitto/secret/passwd $$MQTT_USERNAME $$MQTT_PASSWORD &&
-        mosquitto_passwd -b /mosquitto/secret/passwd wattwise_rpi $$MQTT_PI_PASSWORD &&
+        mosquitto_passwd -b /mosquitto/secret/passwd wattwise_admin $$MQTT_ADMIN_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_001 $$MQTT_HOME_001_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_002 $$MQTT_HOME_002_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_003 $$MQTT_HOME_003_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_004 $$MQTT_HOME_004_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_005 $$MQTT_HOME_005_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_006 $$MQTT_HOME_006_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_007 $$MQTT_HOME_007_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_008 $$MQTT_HOME_008_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_009 $$MQTT_HOME_009_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_010 $$MQTT_HOME_010_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_011 $$MQTT_HOME_011_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_012 $$MQTT_HOME_012_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_013 $$MQTT_HOME_013_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_014 $$MQTT_HOME_014_PASS &&
+        mosquitto_passwd -b /mosquitto/secret/passwd home_015 $$MQTT_HOME_015_PASS &&
         chmod 0755 /mosquitto/secret &&
         chmod 0644 /mosquitto/secret/passwd &&
-        echo 'passwd file created successfully'
+        echo 'passwd file created — 17 users provisioned'
       "
     networks:
       - wattwise-network
@@ -171,7 +201,7 @@ services:
     networks:
       - wattwise-network
 
-  # ── Dummy Data Sender ── uncomment for local testing ─────────
+  # ── Dummy Data Sender ── uncomment for local testing only ───────
   dummy-data-sender:
     build:
       context: .
@@ -180,7 +210,8 @@ services:
     restart: unless-stopped
     env_file:
       - ./Server Side/.env
-    command: ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--interval", "5", "--backfill-days", "2", "--csv", "participants.csv"]
+    # --no-backfill skips the initial historical flood; --interval 30 = one batch/30s
+    command: ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--no-backfill", "--interval", "30", "--csv", "participants.csv"]
     depends_on:
       backend:
         condition: service_healthy

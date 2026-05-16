@@ -326,6 +326,48 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
     INDEX idx_audit_action (action_type, created_at)
 ) ENGINE=InnoDB;
 
+-- ── PERSONA CLUSTER ASSIGNMENTS (PhD research dataset) ─────────
+CREATE TABLE IF NOT EXISTS persona_cluster_assignments (
+    id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    run_id           CHAR(36) NOT NULL,
+    run_at           DATETIME NOT NULL,
+    user_id          INT UNSIGNED NOT NULL,
+    persona_id       INT UNSIGNED DEFAULT NULL,
+    cluster_label    INT NOT NULL,
+    algorithm        VARCHAR(32) NOT NULL,
+    silhouette       FLOAT DEFAULT NULL,
+    davies_bouldin   FLOAT DEFAULT NULL,
+    n_samples        INT DEFAULT NULL,
+    features         JSON DEFAULT NULL,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
+    INDEX idx_pca_run (run_id),
+    INDEX idx_pca_user_time (user_id, run_at)
+) ENGINE=InnoDB;
+
+-- ── VERIFIED DEVICE ACTIONS (closed-loop research evidence) ────
+CREATE TABLE IF NOT EXISTS decision_observed_actions (
+    id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    notification_id  BIGINT UNSIGNED NOT NULL,
+    decision_id      BIGINT UNSIGNED DEFAULT NULL,
+    user_id          INT UNSIGNED NOT NULL,
+    device_id        INT UNSIGNED DEFAULT NULL,
+    entity_id        VARCHAR(128) DEFAULT NULL,
+    source           ENUM('rpi_homeassistant', 'admin_manual') NOT NULL,
+    observed_state   VARCHAR(32) NOT NULL,
+    previous_state   VARCHAR(32) DEFAULT NULL,
+    observed_at      DATETIME NOT NULL,
+    raw_payload      JSON DEFAULT NULL,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+    FOREIGN KEY (decision_id) REFERENCES user_decisions(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL,
+    INDEX idx_doa_notification (notification_id),
+    INDEX idx_doa_user_time (user_id, observed_at)
+) ENGINE=InnoDB;
+
 -- ── DEFAULT ADMIN USER ────────────────────────────────────────
 -- Password: wattwise_admin (bcrypt hash — change before production)
 INSERT IGNORE INTO users (name, email, password_hash, is_admin, notifications_enabled)

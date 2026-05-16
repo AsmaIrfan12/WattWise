@@ -292,6 +292,11 @@ class AdminDashboardResponse(BaseModel):
 class PushTokenUpdate(BaseModel):
     push_token: str
 
+class ProfileUpdateRequest(BaseModel):
+    monthly_budget_gbp: Optional[float] = Field(default=None, ge=0)
+    daily_energy_goal_kwh: Optional[float] = Field(default=None, ge=0)
+    notifications_enabled: Optional[bool] = None
+
 
 # ── Environment (Room Sensors) ─────────────────────────────────
 

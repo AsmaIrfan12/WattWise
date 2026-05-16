@@ -37,9 +37,46 @@ sudo chmod +x "$INSTALL_DIR/rpi_mqtt_publisher.py"
 if [ ! -f "$CONFIG_DIR/publisher.yaml" ]; then
     echo "📋 Copying example config to $CONFIG_DIR/publisher.yaml"
     sudo cp rpi_publisher_config.yaml "$CONFIG_DIR/publisher.yaml"
-    echo "⚠️   IMPORTANT: Edit $CONFIG_DIR/publisher.yaml with your home_id, device entity IDs, and MQTT credentials!"
+    echo ""
+    echo "⚠️  ══════════════════════════════════════════════════════════════"
+    echo "⚠️   CREDENTIALS REQUIRED — publisher will NOT start until you set:"
+    echo "⚠️     • mqtt.username  — your home ID  (e.g. home_003)"
+    echo "⚠️     • mqtt.password  — password from the researcher"
+    echo "⚠️   Edit now: sudo nano $CONFIG_DIR/publisher.yaml"
+    echo "⚠️  ══════════════════════════════════════════════════════════════"
+    echo ""
 else
     echo "ℹ️   Config already exists at $CONFIG_DIR/publisher.yaml — skipping copy"
+fi
+
+# ── Validate credentials in config before enabling service ──
+_check_creds() {
+    local cfg="$CONFIG_DIR/publisher.yaml"
+    local user pass
+    user=$(grep -E "^\s+username:" "$cfg" | awk '{print $2}' | tr -d '"' | xargs)
+    pass=$(grep -E "^\s+password:" "$cfg" | awk '{print $2}' | tr -d '"' | xargs)
+
+    local ok=true
+    [ -z "$user" ] && { echo "❌ mqtt.username is blank in $cfg"; ok=false; }
+    [ -z "$pass" ] && { echo "❌ mqtt.password is blank in $cfg"; ok=false; }
+    [ "$pass" = "REPLACE_WITH_YOUR_MQTT_PASSWORD" ] && { echo "❌ mqtt.password still contains placeholder in $cfg"; ok=false; }
+
+    if [ "$ok" = false ]; then
+        echo ""
+        echo "⚠️  Edit the config before starting the service:"
+        echo "     sudo nano $CONFIG_DIR/publisher.yaml"
+        echo "     sudo systemctl start $SERVICE_NAME"
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+if ! _check_creds; then
+    echo "⚠️   Service installed but NOT started — fill in credentials first."
+else
+    echo "✅ Credentials look set — starting service..."
+    sudo systemctl start "$SERVICE_NAME"
 fi
 
 # ── Create log file ──

@@ -1,9 +1,13 @@
 # WattWise RPi MQTT Publisher — Configuration
 # =============================================
 # Copy this file to /etc/wattwise/publisher.yaml on each Raspberry Pi.
-# Edit home.id and home.devices to match the registered home in WattWise.
+# Edit home.id, mqtt.username, mqtt.password, and home.devices to match
+# your registered home in WattWise.
 #
 # Author: Mr. Suhas Devmane, Cardiff University, UK
+#
+# IMPORTANT: credentials are mandatory. The publisher will refuse to start
+# if username or password is left blank.
 
 # ── Home Identity ─────────────────────────────────────────────────
 # home.id must match the numeric MySQL homes.id returned by POST /api/homes
@@ -76,34 +80,28 @@ influxdb:
   ssl: false
 
 # ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
-# Choose ONE connection method and comment out the other.
-#
-# Option A — WebSocket via nginx on port 80 (same port as the web app):
+# Connects via WebSocket to the Cloudflare-fronted nginx proxy.
+# Domain is mandatory — use the domain, NOT the bare IP address.
+# TLS is terminated by Cloudflare; nginx receives plain WebSocket on port 443.
 mqtt:
-  host: "129.212.138.248"
-  port: 80
+  host: "www.talk2futurebuildings.systems"
+  port: 443
   transport: "websockets"
   ws_path: "/mqtt"
-  username: ""
-  password: ""
-  tls: false
+  # REQUIRED: fill in credentials issued by the researcher for your home.
+  # These must match the home_NNN username in the broker ACL.
+  username: "home_001"        # ← replace NNN with your home number (e.g. home_003)
+  password: "REPLACE_WITH_YOUR_MQTT_PASSWORD"  # ← never leave blank
+  tls: true
 
-# Option B — Direct MQTT TCP on port 1883 (simpler protocol):
-#   Uncomment this block and comment out Option A to use it.
+# Option B — Direct MQTT TCP on port 1883 (LAN/dev only, no TLS):
+#   Only use this when RPi and broker are on the same local network.
 # mqtt:
-#   host: "129.212.138.248"
+#   host: "localhost"
 #   port: 1883
 #   transport: "tcp"
-#   username: ""
-#   password: ""
-#   tls: false
-
-# ── Original Cloudflare config preserved as reference ─────────────────────────
-# mqtt:
-#   host: "talk2futurebuildings.systems"
-#   port: 443
-#   transport: "websockets"
-#   ws_path: "/mqtt"
+#   username: "home_001"
+#   password: "REPLACE_WITH_YOUR_MQTT_PASSWORD"
 #   tls: false
 
 # ── Publisher Settings ────────────────────────────────────────────

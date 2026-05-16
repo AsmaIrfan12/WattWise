@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.wattwise.userapp.R
 import com.wattwise.userapp.util.Constants
 
 /**
@@ -62,9 +63,7 @@ object WattWiseFcmService {
             else       -> NotificationCompat.CATEGORY_RECOMMENDATION
         }
 
-        // Use a built-in system drawable until a custom ic_notification_wattwise
-        // drawable resource is added to res/drawable/
-        val iconRes = android.R.drawable.ic_dialog_info
+        val iconRes = R.drawable.ic_notification_wattwise
 
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(iconRes)

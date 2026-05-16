@@ -15,6 +15,8 @@
       "NotebookRead",
       "NotebookEdit",
       "TodoRead",
-      "TodoWrite"    ]
+      "TodoWrite",
+      "PowerShell(git -C \"c:\\\\Users\\\\suhas\\\\Documents\\\\GitHub\\\\WattWise\" ls-files --error-unmatch \"User Apps/Android/WattWiseUserApp/IAA-V3.0.0.apk\" 2>&1)"
+    ]
   }
 }

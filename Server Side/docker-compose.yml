@@ -10,7 +10,22 @@ services:
     environment:
       MQTT_USERNAME: ${MQTT_USERNAME:-wattwise_backend}
       MQTT_PASSWORD: ${MQTT_PASSWORD:?MQTT_PASSWORD must be set in .env}
-      MQTT_ADMIN_PASS: ${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}
+      MQTT_ADMIN_PASS: ${MQTT_ADMIN_PASS:?MQTT_ADMIN_PASS must be set in .env}
+      MQTT_HOME_001_PASS: ${MQTT_HOME_001_PASS:?MQTT_HOME_001_PASS must be set in .env}
+      MQTT_HOME_002_PASS: ${MQTT_HOME_002_PASS:?MQTT_HOME_002_PASS must be set in .env}
+      MQTT_HOME_003_PASS: ${MQTT_HOME_003_PASS:?MQTT_HOME_003_PASS must be set in .env}
+      MQTT_HOME_004_PASS: ${MQTT_HOME_004_PASS:?MQTT_HOME_004_PASS must be set in .env}
+      MQTT_HOME_005_PASS: ${MQTT_HOME_005_PASS:?MQTT_HOME_005_PASS must be set in .env}
+      MQTT_HOME_006_PASS: ${MQTT_HOME_006_PASS:?MQTT_HOME_006_PASS must be set in .env}
+      MQTT_HOME_007_PASS: ${MQTT_HOME_007_PASS:?MQTT_HOME_007_PASS must be set in .env}
+      MQTT_HOME_008_PASS: ${MQTT_HOME_008_PASS:?MQTT_HOME_008_PASS must be set in .env}
+      MQTT_HOME_009_PASS: ${MQTT_HOME_009_PASS:?MQTT_HOME_009_PASS must be set in .env}
+      MQTT_HOME_010_PASS: ${MQTT_HOME_010_PASS:?MQTT_HOME_010_PASS must be set in .env}
+      MQTT_HOME_011_PASS: ${MQTT_HOME_011_PASS:?MQTT_HOME_011_PASS must be set in .env}
+      MQTT_HOME_012_PASS: ${MQTT_HOME_012_PASS:?MQTT_HOME_012_PASS must be set in .env}
+      MQTT_HOME_013_PASS: ${MQTT_HOME_013_PASS:?MQTT_HOME_013_PASS must be set in .env}
+      MQTT_HOME_014_PASS: ${MQTT_HOME_014_PASS:?MQTT_HOME_014_PASS must be set in .env}
+      MQTT_HOME_015_PASS: ${MQTT_HOME_015_PASS:?MQTT_HOME_015_PASS must be set in .env}
     volumes:
       - mosquitto_secret:/secret
     entrypoint:
@@ -19,8 +34,23 @@ services:
       - >-
         mosquitto_passwd -b -c /secret/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
         mosquitto_passwd -b /secret/passwd wattwise_admin "$$MQTT_ADMIN_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_001 "$$MQTT_HOME_001_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_002 "$$MQTT_HOME_002_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_003 "$$MQTT_HOME_003_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_004 "$$MQTT_HOME_004_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_005 "$$MQTT_HOME_005_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_006 "$$MQTT_HOME_006_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_007 "$$MQTT_HOME_007_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_008 "$$MQTT_HOME_008_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_009 "$$MQTT_HOME_009_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_010 "$$MQTT_HOME_010_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_011 "$$MQTT_HOME_011_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_012 "$$MQTT_HOME_012_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_013 "$$MQTT_HOME_013_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_014 "$$MQTT_HOME_014_PASS" &&
+        mosquitto_passwd -b /secret/passwd home_015 "$$MQTT_HOME_015_PASS" &&
         chmod 0700 /secret/passwd &&
-        echo "mosquitto passwd provisioned for $$MQTT_USERNAME"
+        echo "mosquitto passwd provisioned for $$MQTT_USERNAME and 15 homes"
     networks:
       - wattwise-network
 
@@ -71,7 +101,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d
@@ -106,7 +136,7 @@ services:
       INFLUXDB_ADMIN_USER: ${INFLUX_USER}
       INFLUXDB_ADMIN_PASSWORD: ${INFLUX_PASS}
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     volumes:
       - influxdb_data:/var/lib/influxdb
     healthcheck:
@@ -140,7 +170,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s

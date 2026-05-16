@@ -81,6 +81,14 @@ def _security_warnings() -> list[str]:
         warnings.append("SECRET_KEY appears to use a default placeholder")
     if settings.ADMIN_PASSWORD and "changeme" in settings.ADMIN_PASSWORD.lower():
         warnings.append("ADMIN_PASSWORD appears to use a default placeholder")
+    if "changeme" in settings.DB_PASS.lower():
+        warnings.append("DB_PASS appears to use a default placeholder")
+    if "changeme" in settings.INFLUX_PASS.lower():
+        warnings.append("INFLUX_PASS appears to use a default placeholder")
+    if "changeme" in settings.MQTT_PASSWORD.lower():
+        warnings.append("MQTT_PASSWORD appears to use a default placeholder")
+    if hasattr(settings, "RPI_WEBHOOK_SECRET") and "changeme" in settings.RPI_WEBHOOK_SECRET.lower():
+        warnings.append("RPI_WEBHOOK_SECRET appears to use a default placeholder")
     if any(origin.strip() == "*" for origin in settings.allowed_origins_list):
         warnings.append("ALLOWED_ORIGINS contains wildcard '*' which is unsafe for production")
     return warnings
@@ -245,7 +253,7 @@ app.add_middleware(
 # ── JWT Auth Middleware ───────────────────────────────────────
 PUBLIC_PATHS = {
     "/", "/health", "/health/dependencies", "/health/slo", "/metrics", "/docs", "/openapi.json", "/redoc",
-    "/api/auth/signup", "/api/auth/login", "/api/auth/forgot-password",
+    "/api/auth/signup", "/api/auth/login", "/api/auth/forgot-password", "/api/auth/reset-password",
     # RPi/Home-Assistant verified-action webhook — authenticated by the
     # X-WattWise-RPi-Key shared secret inside the endpoint, not by JWT.
     "/api/decisions/observed-action",

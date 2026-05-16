@@ -1,5 +1,6 @@
 package com.wattwise.userapp.ui.settings
 
+import com.wattwise.userapp.data.local.NotificationPrefsStore
 import com.wattwise.userapp.data.local.TokenDataStore
 import com.wattwise.userapp.data.repository.ServerRepository
 import com.wattwise.userapp.domain.model.Resource
@@ -29,6 +30,7 @@ class SettingsViewModelTest {
     private val testDispatcher = StandardTestDispatcher()
     private lateinit var repository: ServerRepository
     private lateinit var tokenDataStore: TokenDataStore
+    private lateinit var notifPrefs: NotificationPrefsStore
     private lateinit var viewModel: SettingsViewModel
 
     @Before
@@ -36,6 +38,7 @@ class SettingsViewModelTest {
         Dispatchers.setMain(testDispatcher)
         repository = mockk(relaxed = true)
         tokenDataStore = mockk(relaxed = true)
+        notifPrefs = mockk(relaxed = true)
 
         // Stub reactive flows
         coEvery { repository.serverUrl } returns flowOf("https://www.talk2futurebuildings.systems")
@@ -54,7 +57,7 @@ class SettingsViewModelTest {
             repository.testConnection(any(), any())
         } returns Resource.Success(200)
 
-        viewModel = SettingsViewModel(repository, tokenDataStore)
+        viewModel = SettingsViewModel(repository, tokenDataStore, notifPrefs)
         viewModel.testConnection("https://www.talk2futurebuildings.systems", 443)
 
         advanceUntilIdle()
@@ -70,7 +73,7 @@ class SettingsViewModelTest {
             repository.testConnection(any(), any())
         } returns Resource.Error("Connection refused")
 
-        viewModel = SettingsViewModel(repository, tokenDataStore)
+        viewModel = SettingsViewModel(repository, tokenDataStore, notifPrefs)
         viewModel.testConnection("http://invalid-server", 3001)
 
         advanceUntilIdle()

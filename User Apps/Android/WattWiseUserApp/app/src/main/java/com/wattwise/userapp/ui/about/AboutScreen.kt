@@ -96,6 +96,29 @@ fun AboutScreen(onNavigateBack: () -> Unit) {
 
             // ── Info Cards ──
             InfoCard(
+                icon = "🔬",
+                title = "Research",
+                lines = listOf(
+                    "PhD Research Programme",
+                    Constants.RESEARCH_DESCRIPTION,
+                    "",
+                    "PhD Researcher",
+                    "${Constants.RESEARCHER_NAME}  ·  ${Constants.RESEARCHER_EMAIL}",
+                    "",
+                    "Platform Developer",
+                    "${Constants.DEVELOPER_NAME}  ·  ${Constants.DEVELOPER_EMAIL}"
+                )
+            )
+            InfoCard(
+                icon = "👨‍🏫",
+                title = "Supervisors",
+                lines = listOf(
+                    Constants.SUPERVISOR_1,
+                    Constants.SUPERVISOR_2,
+                    Constants.DEVELOPER_INSTITUTION
+                )
+            )
+            InfoCard(
                 icon = "🎓",
                 title = "Developer",
                 lines = listOf(Constants.DEVELOPER_NAME, Constants.DEVELOPER_INSTITUTION)
@@ -104,14 +127,6 @@ fun AboutScreen(onNavigateBack: () -> Unit) {
                 icon = "🏫",
                 title = "School",
                 lines = listOf(Constants.DEVELOPER_SCHOOL, Constants.DEVELOPER_LOCATION)
-            )
-            InfoCard(
-                icon = "🔬",
-                title = "Research",
-                lines = listOf(
-                    "PhD Research Programme",
-                    Constants.RESEARCH_DESCRIPTION
-                )
             )
             InfoCard(
                 icon = "⚡",
@@ -145,7 +160,7 @@ fun AboutScreen(onNavigateBack: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "© 2024–2026 ${Constants.DEVELOPER_NAME}\n${Constants.DEVELOPER_INSTITUTION}",
+                text = "© 2024–2026 ${Constants.RESEARCHER_NAME} & ${Constants.DEVELOPER_NAME}\n${Constants.DEVELOPER_INSTITUTION}",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -183,13 +198,17 @@ private fun InfoCard(icon: String, title: String, lines: List<String>) {
                     color = MaterialTheme.colorScheme.primary
                 )
                 lines.forEach { line ->
-                    Text(
-                        text = line,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 20.sp,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
+                    if (line.isEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    } else {
+                        Text(
+                            text = line,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 20.sp,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
             }
         }

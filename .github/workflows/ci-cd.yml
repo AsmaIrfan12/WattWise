@@ -101,6 +101,72 @@ jobs:
           path: "User Apps/Android/WattWiseUserApp/app/build/outputs/apk/debug/*.apk"
           retention-days: 14
 
+  # ── Android Release APK (signed, main branch only) ─────────────────
+  release-android:
+    name: Android — Signed Release APK
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [build-android]
+    defaults:
+      run:
+        working-directory: "User Apps/Android/WattWiseUserApp"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+
+      - name: Grant Gradle execute permission
+        run: chmod +x gradlew
+
+      - name: Decode release keystore
+        # Requires GitHub Secrets:
+        #   RELEASE_KEYSTORE_BASE64 — base64 of wattwise-release.jks
+        #   RELEASE_STORE_PASSWORD  — store password
+        #   RELEASE_KEY_ALIAS       — key alias (default: wattwise)
+        #   RELEASE_KEY_PASSWORD    — key password
+        # Generate keystore once:
+        #   keytool -genkeypair -v -keystore wattwise-release.jks \
+        #     -keyalg RSA -keysize 2048 -validity 10000 -alias wattwise
+        # Then: cat wattwise-release.jks | base64 -w 0
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "⚠️  RELEASE_KEYSTORE_BASE64 not set — producing debug-signed release APK"
+          else
+            echo "$KEYSTORE_B64" | base64 -d > wattwise-release.jks
+            cat > keystore.properties << EOF
+          storeFile=wattwise-release.jks
+          storePassword=${{ secrets.RELEASE_STORE_PASSWORD }}
+          keyAlias=${{ secrets.RELEASE_KEY_ALIAS }}
+          keyPassword=${{ secrets.RELEASE_KEY_PASSWORD }}
+          EOF
+            echo "✅ Keystore decoded and keystore.properties written"
+          fi
+
+      - name: Build signed Release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wattwise-release-apk
+          path: "User Apps/Android/WattWiseUserApp/app/build/outputs/apk/release/*.apk"
+          retention-days: 30
+
   # ── Docker Build & Push ────────────────────────────────────────────
   build-docker:
     name: Docker — Build & Push Images

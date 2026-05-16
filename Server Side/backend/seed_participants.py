@@ -159,5 +159,9 @@ async def seed_db():
         await session.commit()
         log.info(f"✨ Seed & Sync Complete! Added {inserted_users} new users, synced passwords for all.")
 
+    # Explicitly dispose the engine so aiomysql connection cleanup
+    # happens before asyncio.run() closes the event loop (Python 3.12+).
+    await engine.dispose()
+
 if __name__ == "__main__":
     asyncio.run(seed_db())

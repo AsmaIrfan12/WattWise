@@ -48,30 +48,37 @@ case "${1:-init}" in
   add-home)
     HOME_ID="${2:-}"
     if [ -z "$HOME_ID" ]; then
-      echo "❌ Usage: $0 add-home <home_id>"
+      echo "❌ Usage: $0 add-home <home_id>  (e.g. home_016)"
       exit 1
     fi
 
-    HOME_USER="rpi_home_${HOME_ID}"
+    # Username matches acl.conf format: home_NNN (not rpi_home_NNN)
+    HOME_USER="${HOME_ID}"
     HOME_PASS=$(openssl rand -base64 24)
 
     echo "🏠 Adding MQTT user for home: $HOME_ID"
     passwd_in_volume -b "$PASSWD_FILE" "$HOME_USER" "$HOME_PASS"
 
-    # Append ACL entry
-    cat >> "$ACL_FILE" << EOF
+    # Append ACL entry only if not already present
+    if ! grep -q "user ${HOME_USER}" "$ACL_FILE"; then
+      cat >> "$ACL_FILE" << EOF
 
-# Home ${HOME_ID}
+# ── ${HOME_ID} ───────────────────────────────────────────
 user ${HOME_USER}
-topic write wattwise/homes/${HOME_ID}/#
-topic read  wattwise/homes/${HOME_ID}/commands/#
+topic write wattwise/homes/${HOME_USER}/#
+topic read  wattwise/homes/${HOME_USER}/commands/#
 EOF
+      echo "✅ ACL entry added for $HOME_USER"
+    else
+      echo "ℹ️  ACL entry already exists for $HOME_USER — skipped"
+    fi
 
     echo "✅ Home $HOME_ID MQTT user created"
     echo "   Username: $HOME_USER"
     echo "   Password: $HOME_PASS"
     echo ""
     echo "👀 Save these credentials — they are shown only once!"
+    echo "ℹ️  Add MQTT_${HOME_ID^^}_PASS='$HOME_PASS' to Server Side/.env"
     echo "ℹ️  Run: docker compose restart mosquitto  (to apply ACL changes)"
     ;;
 

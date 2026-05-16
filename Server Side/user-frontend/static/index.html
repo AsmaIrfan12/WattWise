@@ -8,8 +8,8 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 <link rel="manifest" href="/manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="/purify.min.js"></script>
+<script src="/chart.umd.min.js"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────────────────── */
 :root {
@@ -694,8 +694,9 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
     <div class="card-hdr"><span class="card-title">WattWise Research Credits</span></div>
     <div style="font-size:.82rem;color:var(--mu);line-height:1.6">
       WattWise is part of a community energy monitoring research project.<br>
-      <strong style="color:var(--t)">Researcher:</strong> Mr. Suhas Devmane, Cardiff University, UK<br>
-      <strong style="color:var(--t)">Supervisor:</strong> Prof. Reza Sahandi, Cardiff University<br>
+      <strong style="color:var(--t)">Researcher:</strong> Asma Irfan, Cardiff University<br>
+      <strong style="color:var(--t)">Developer:</strong> Suhas Devmane, Cardiff University<br>
+      <strong style="color:var(--t)">Supervisors:</strong> Dr. Charith Perera &amp; Prof. Omer Rana, Cardiff University<br>
       <strong style="color:var(--t)">Version:</strong> 2.1.0 (Production) · © 2025–2026
     </div>
   </div>
@@ -1582,12 +1583,12 @@ document.querySelectorAll('.filter-pill').forEach(pill => {
 
 function notifHTML(n, showActions = false) {
   const time = new Date(n.created_at).toLocaleString('en-GB', { timeStyle: 'short', dateStyle: 'short' });
-  return `<div class="notif-item ${n.severity}" style="${n.is_read ? 'opacity:.6' : ''}">
+  return `<div class="notif-item ${n.severity}" data-notif-id="${n.id}" style="${n.is_read ? 'opacity:.6' : ''}">
     <div class="notif-title">${san(n.title)}</div>
     <div class="notif-msg">${san(n.message)}</div>
     ${n.action_hint ? `<div style="font-size:.72rem;color:var(--amber);margin-top:4px">💡 ${san(n.action_hint)}</div>` : ''}
     <div class="notif-time">${time}${n.requires_user_action && !n.dismissed ? ' · <span style="color:var(--amber)">Action needed</span>' : ''}</div>
-    ${showActions && n.requires_user_action && !n.dismissed ? `<div class="notif-actions">
+    ${showActions && n.requires_user_action && !n.dismissed ? `<div class="notif-actions" data-actions-for="${n.id}">
       <button class="btn btn-g btn-sm" onclick="recordDecision(${n.id},'ACCEPTED')">✅ Done it!</button>
       <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'DEFERRED')">⏰ Later</button>
       <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'REJECTED')">❌ Skip</button>
@@ -1598,8 +1599,20 @@ function notifHTML(n, showActions = false) {
 async function recordDecision(notifId, type) {
   try {
     await apiFetch('/decisions/', { method: 'POST', body: JSON.stringify({ notification_id: notifId, decision_type: type }) });
+    const label = type === 'ACCEPTED' ? '✅ Done it!' : type === 'DEFERRED' ? '⏰ Saved for later' : '❌ Skipped';
     toast(type === 'ACCEPTED' ? '✅ Great! We\'ll track your savings.' : type === 'DEFERRED' ? '⏰ Reminder set!' : 'Noted.');
-    loadNotifications();
+
+    // Update only this specific card — do NOT reload all notifications,
+    // as that would re-trigger the bulk auto-markRead timer on all other unread alerts.
+    const actionsDiv = document.querySelector(`[data-actions-for="${notifId}"]`);
+    if (actionsDiv) {
+      actionsDiv.innerHTML = `<span style="font-size:.72rem;color:var(--mu)">${label}</span>`;
+    }
+    const card = document.querySelector(`[data-notif-id="${notifId}"]`);
+    if (card) card.style.opacity = '0.6';
+
+    // Mark only this one notification as read.
+    apiFetch('/notifications/' + notifId + '/read', { method: 'POST' }).catch(() => {});
     refreshNotifBadge();
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
@@ -1804,6 +1817,15 @@ window.saveGoalSetting = saveGoalSetting;
 window.saveBudgetSetting = saveBudgetSetting;
 window.exportMyData = exportMyData;
 window.logout = logout;
+
+// Called by Android WebView after JWT is injected into localStorage.
+// Re-authenticates the frontend without a page reload if the user was logged out.
+window.onNativeTokenInjected = async function(t) {
+  if (!t) return;
+  token = t;
+  localStorage.setItem('ww_token', token);
+  if (!userData) { await init(); }
+};
 </script>
 </body>
 </html>

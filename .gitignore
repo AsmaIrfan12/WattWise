@@ -1,6 +1,7 @@
 # ── Environment files (secrets) ──────────────────
 .env
 Server Side/.env
+Server Side/backend/.env
 
 # ── Node modules (if any remain) ──────────────────
 node_modules/

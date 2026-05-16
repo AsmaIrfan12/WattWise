@@ -251,6 +251,39 @@ async def assign_persona(user_id: int, persona_id: int, request: Request, db: As
     return {"user_id": user_id, "persona": persona.name}
 
 
+@router.patch("/users/{user_id}/budget")
+async def admin_set_user_budget(
+    user_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    monthly_budget_gbp: Optional[float] = None,
+    daily_energy_goal_kwh: Optional[float] = None,
+):
+    """Admin: update a participant's monthly budget and/or daily kWh goal."""
+    admin_id = _require_admin(request)
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    changed = {}
+    if monthly_budget_gbp is not None:
+        user.monthly_budget_gbp = monthly_budget_gbp
+        changed["monthly_budget_gbp"] = monthly_budget_gbp
+    if daily_energy_goal_kwh is not None:
+        user.daily_energy_goal_kwh = daily_energy_goal_kwh
+        changed["daily_energy_goal_kwh"] = daily_energy_goal_kwh
+
+    if not changed:
+        raise HTTPException(status_code=422, detail="Provide monthly_budget_gbp or daily_energy_goal_kwh query param")
+
+    await db.commit()
+    await _log_audit(db, admin_id, "UPDATE_USER_BUDGET", target_user_id=user_id,
+                     details=changed,
+                     ip_address=request.client.host if request.client else None)
+    return {"user_id": user_id, **changed}
+
+
 @router.post("/users/bulk-operation")
 async def bulk_operation(
     request: Request, db: AsyncSession = Depends(get_db),

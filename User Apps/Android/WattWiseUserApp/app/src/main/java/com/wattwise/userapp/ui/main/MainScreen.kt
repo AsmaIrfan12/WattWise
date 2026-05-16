@@ -16,6 +16,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import org.json.JSONObject
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -165,16 +166,31 @@ fun MainScreen(
         }
     }
 
+    // ── Re-inject JWT after settings save ────────────────────────────────
+    // Fires whenever webUrl changes (e.g. server URL or port edited in Settings).
+    // Re-injects the token into WebView localStorage so the web frontend
+    // can re-authenticate via window.onNativeTokenInjected without a reload.
+    LaunchedEffect(webUrl) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        val tok = viewModel.secureTokenStore.getTokenSync() ?: return@LaunchedEffect
+        val safeToken = JSONObject.quote(tok)
+        val js = """
+            (function() {
+              try {
+                localStorage.setItem('ww_token', $safeToken);
+                if (typeof window.onNativeTokenInjected === 'function') {
+                  window.onNativeTokenInjected($safeToken);
+                }
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        wv.evaluateJavascript(js, null)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        text = "WattWise",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                },
+                title = {},
                 actions = {
                     IconButton(onClick = { webViewRef?.reload() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -227,7 +243,7 @@ fun MainScreen(
                                     setSupportZoom(true)
                                     builtInZoomControls = true
                                     displayZoomControls = false
-                                    mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                                     allowFileAccess = false
                                     allowContentAccess = false
                                     setGeolocationEnabled(true)
@@ -269,21 +285,26 @@ fun MainScreen(
                                         // even after rotation (when the URL fragment is not resent).
                                         val token = viewModel.secureTokenStore.getTokenSync()
                                         if (!token.isNullOrBlank()) {
+                                            // JSONObject.quote() safely escapes the token so any
+                                            // special chars (e.g. from a crafted token) cannot break
+                                            // out of the JS string literal.
+                                            val safeToken = JSONObject.quote(token)
                                             val js = """
                                                 (function() {
                                                   try {
+                                                    var t = $safeToken;
                                                     var existing = localStorage.getItem('ww_token');
-                                                    if (!existing || existing !== '$token') {
-                                                      localStorage.setItem('ww_token', '$token');
+                                                    if (!existing || existing !== t) {
+                                                      localStorage.setItem('ww_token', t);
                                                       if (typeof window.onNativeTokenInjected === 'function') {
-                                                        window.onNativeTokenInjected('$token');
+                                                        window.onNativeTokenInjected(t);
                                                       }
                                                     }
                                                   } catch(e) {}
                                                 })();
                                             """.trimIndent()
                                             view?.evaluateJavascript(js, null)
-                                            Timber.d("🔐 JWT injected into WebView localStorage")
+                                            Timber.d("JWT injected into WebView localStorage")
                                         }
                                     }
 

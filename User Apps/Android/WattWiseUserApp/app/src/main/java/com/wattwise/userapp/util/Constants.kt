@@ -52,10 +52,19 @@ object Constants {
 
     // ── Developer & Research Details ─────────────────────────────
     const val DEVELOPER_NAME         = "Mr. Suhas Devmane"
+    const val DEVELOPER_EMAIL        = "Devmanesp1@cardiff.ac.uk"
     const val DEVELOPER_INSTITUTION  = "Cardiff University"
     const val DEVELOPER_SCHOOL       = "School of Computer Science & Informatics (COMSC)"
     const val DEVELOPER_LOCATION     = "Cardiff, Wales, United Kingdom"
     const val RESEARCH_DESCRIPTION   = "Community Energy Decision-Making & Behaviour Change"
+
+    // ── Primary Researcher ────────────────────────────────────────
+    const val RESEARCHER_NAME        = "Asma Irfan"
+    const val RESEARCHER_EMAIL       = "IrfanA1@cardiff.ac.uk"
+
+    // ── PhD Supervisors ───────────────────────────────────────────
+    const val SUPERVISOR_1           = "Prof Omer Rana"
+    const val SUPERVISOR_2           = "Dr. Charith Perera"
 
     // ── App Metadata ─────────────────────────────────────────────
     const val APP_VERSION        = "4.0.0"
