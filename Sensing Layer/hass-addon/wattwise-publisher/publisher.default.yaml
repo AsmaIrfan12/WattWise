@@ -1,0 +1,92 @@
+# WattWise RPi MQTT Publisher — Config for Asma Irfan's RPi
+# ==========================================================
+# Self-contained deployment bundle. Copy this whole folder to the RPi, then:
+#   bash install_publisher.sh
+# The installer copies this file to /etc/wattwise/publisher.yaml.
+#
+# Research Lead: Mr. Suhas Devmane, Cardiff University, UK
+#
+# Values below are filled from the admin/server side for Asma Irfan
+# (user_id 52, MySQL home_id 51, MQTT user home_001).
+#
+# The ONLY value you may still need to adjust is each device's `power_entity_id`
+# — that must match the entity_id TAG as stored in THIS RPi's Home Assistant
+# InfluxDB (see the per-device note). Confirm it in the InfluxDB add-on before
+# relying on the data. `entity_id` (sent to the cloud) must stay exactly as
+# written — the backend matches readings to Asma's devices by that string.
+
+# ── Home Identity ─────────────────────────────────────────────────
+# NOTE: home.id is the value used in the MQTT topic
+#   wattwise/homes/<home.id>/devices/<device.id>/data
+# It MUST be "home_001" to satisfy the broker ACL for user home_001.
+# (Asma's numeric MySQL homes.id is 51, but the backend matches readings
+#  by device entity_id, not by the topic home id — so use home_001 here.)
+home:
+  id: "home_001"
+  name: "Asma's Home"
+
+  # Asma's 4 registered devices.
+  #   entity_id        = the exact string the cloud backend stores for the device.
+  #                      Readings are matched to Asma by THIS string — do NOT change it.
+  #   power_entity_id  = the entity_id TAG inside THIS RPi's HA InfluxDB (measurement
+  #                      "W", field "value"). CONFIRMED from Chronograf: the real
+  #                      appliance names, no "sensor." prefix.
+  #                      Verified via: SHOW TAG VALUES FROM "W" WITH KEY = "entity_id"
+  devices:
+    - id: "airfryer"
+      name: "Airfryer"
+      appliance_key: "airfryer"
+      entity_id: "sensor.airfryer_04d1f4"                 # cloud match — keep as-is
+      power_entity_id: "airfryer_current_consumption"     # HA InfluxDB tag (confirmed)
+
+    - id: "dishwasher"
+      name: "Dishwasher"
+      appliance_key: "dishwasher"
+      entity_id: "sensor.dishwasher_aebe90"               # cloud match — keep as-is
+      power_entity_id: "dishwasher_current_consumption"   # HA InfluxDB tag (confirmed)
+
+    - id: "microwave"
+      name: "Microwave"
+      appliance_key: "microwave"
+      entity_id: "sensor.microwave_821ec2"                # cloud match — keep as-is
+      power_entity_id: "microwave_current_consumption"    # HA InfluxDB tag (confirmed)
+
+    - id: "washing_machine"
+      name: "Washing Machine"
+      appliance_key: "washing_machine"
+      entity_id: "sensor.washing_machine_b612c5"          # cloud match — keep as-is
+      power_entity_id: "washing_machine_current_consumption"  # HA InfluxDB tag (confirmed)
+
+  # NOTE: HA InfluxDB also has kettle_current_consumption and toaster_current_consumption,
+  # but Asma has no kettle/toaster device registered in the cloud, so they are not
+  # published (the backend would drop unmatched entity_ids). Ask the researcher to
+  # register them if she wants those tracked.
+
+# ── Local InfluxDB (Home Assistant's InfluxDB add-on on THIS RPi) ──────────────
+# The publisher runs on the RPi itself, so it reaches the add-on on localhost.
+# The Tailscale URL (…/a0d7b954_influxdb) is only the remote ingress UI — do NOT
+# use it here. Port 8086 is the add-on's host port; HA's default database is
+# "homeassistant". If Asma's InfluxDB add-on has auth enabled, fill username/password.
+influxdb:
+  host: "localhost"
+  port: 8086
+  database: "homeassistant"
+  username: ""                # leave blank if the InfluxDB add-on has no auth
+  password: ""
+  ssl: false
+
+# ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
+# WebSocket via the Cloudflare-fronted nginx proxy. TLS is terminated by
+# Cloudflare; use the domain, never a bare IP.
+mqtt:
+  host: "www.talk2futurebuildings.systems"
+  port: 443
+  transport: "websockets"
+  ws_path: "/mqtt"
+  username: "home_001"
+  password: "REPLACE_WITH_YOUR_MQTT_PASSWORD"  # ← set on the RPi only; never commit the real value
+  tls: true
+
+# ── Publisher Settings ────────────────────────────────────────────
+publish_interval_seconds: 30   # Read + publish every 30 seconds
+log_level: "INFO"              # DEBUG | INFO | WARNING | ERROR

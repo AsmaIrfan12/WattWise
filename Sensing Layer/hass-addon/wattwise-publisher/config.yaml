@@ -1,0 +1,21 @@
+name: WattWise Publisher
+version: "1.0.0"
+slug: wattwise_publisher
+description: Reads Home Assistant's InfluxDB and publishes energy telemetry to the WattWise cloud over MQTT.
+url: https://github.com/AsmaIrfan12/WattWise
+# Runs on Pi (aarch64/armv7) and dev machines (amd64).
+arch:
+  - aarch64
+  - armv7
+  - armhf
+  - amd64
+# host_network lets the add-on reach the InfluxDB add-on on localhost:8086,
+# the same address the publisher.yaml expects.
+host_network: true
+init: false
+startup: application
+boot: auto
+# Maps Home Assistant's /config so the editable publisher config lives at
+# /config/wattwise_publisher.yaml (visible in the File editor / Samba add-ons).
+map:
+  - config:rw
