@@ -25,37 +25,42 @@ home:
   id: "home_001"
   name: "Asma's Home"
 
-  # Asma's 4 registered devices. `entity_id` = the exact string the backend
-  # stores for each device (do NOT change — readings are matched by it).
-  # `power_entity_id` = the entity_id TAG inside THIS RPi's HA InfluxDB, used
-  # to read the live wattage. Home Assistant usually stores the tag WITHOUT the
-  # "sensor." domain prefix — verify each one in the InfluxDB add-on:
-  #     SHOW TAG VALUES FROM "W" WITH KEY = "entity_id"
-  # If your HA stores the full "sensor.xxx" form, set power_entity_id to match.
+  # Asma's 4 registered devices.
+  #   entity_id        = the exact string the cloud backend stores for the device.
+  #                      Readings are matched to Asma by THIS string — do NOT change it.
+  #   power_entity_id  = the entity_id TAG inside THIS RPi's HA InfluxDB (measurement
+  #                      "W", field "value"). CONFIRMED from Chronograf: the real
+  #                      appliance names, no "sensor." prefix.
+  #                      Verified via: SHOW TAG VALUES FROM "W" WITH KEY = "entity_id"
   devices:
     - id: "airfryer"
       name: "Airfryer"
       appliance_key: "airfryer"
-      entity_id: "sensor.airfryer_04d1f4"          # cloud match — keep as-is
-      power_entity_id: "airfryer_04d1f4"           # ← VERIFY in HA InfluxDB
+      entity_id: "sensor.airfryer_04d1f4"                 # cloud match — keep as-is
+      power_entity_id: "airfryer_current_consumption"     # HA InfluxDB tag (confirmed)
 
     - id: "dishwasher"
       name: "Dishwasher"
       appliance_key: "dishwasher"
-      entity_id: "sensor.dishwasher_aebe90"        # cloud match — keep as-is
-      power_entity_id: "dishwasher_aebe90"         # ← VERIFY in HA InfluxDB
+      entity_id: "sensor.dishwasher_aebe90"               # cloud match — keep as-is
+      power_entity_id: "dishwasher_current_consumption"   # HA InfluxDB tag (confirmed)
 
     - id: "microwave"
       name: "Microwave"
       appliance_key: "microwave"
-      entity_id: "sensor.microwave_821ec2"         # cloud match — keep as-is
-      power_entity_id: "microwave_821ec2"          # ← VERIFY in HA InfluxDB
+      entity_id: "sensor.microwave_821ec2"                # cloud match — keep as-is
+      power_entity_id: "microwave_current_consumption"    # HA InfluxDB tag (confirmed)
 
     - id: "washing_machine"
       name: "Washing Machine"
       appliance_key: "washing_machine"
-      entity_id: "sensor.washing_machine_b612c5"   # cloud match — keep as-is
-      power_entity_id: "washing_machine_b612c5"    # ← VERIFY in HA InfluxDB
+      entity_id: "sensor.washing_machine_b612c5"          # cloud match — keep as-is
+      power_entity_id: "washing_machine_current_consumption"  # HA InfluxDB tag (confirmed)
+
+  # NOTE: HA InfluxDB also has kettle_current_consumption and toaster_current_consumption,
+  # but Asma has no kettle/toaster device registered in the cloud, so they are not
+  # published (the backend would drop unmatched entity_ids). Ask the researcher to
+  # register them if she wants those tracked.
 
 # ── Local InfluxDB (Home Assistant's InfluxDB add-on on THIS RPi) ──────────────
 # The publisher runs on the RPi itself, so it reaches the add-on on localhost.

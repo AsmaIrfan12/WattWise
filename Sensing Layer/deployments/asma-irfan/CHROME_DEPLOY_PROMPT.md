@@ -37,14 +37,17 @@ publisher will silently send zeros if the InfluxDB entity tags are wrong.
 | InfluxDB | `localhost:8086`, database `homeassistant`, no auth (verify) |
 
 Asma's 4 registered devices — the **`entity_id`** is the cloud-match string (keep exactly),
-the **InfluxDB tag** is what you must confirm in Phase 1:
+the **InfluxDB tag** is the real HA name (confirmed in Chronograf):
 
-| Appliance | entity_id (cloud match — keep) | Expected InfluxDB entity_id tag (verify) |
+| Appliance | entity_id (cloud match — keep) | InfluxDB entity_id tag (power_entity_id) |
 |---|---|---|
-| Airfryer | `sensor.airfryer_04d1f4` | `airfryer_04d1f4` |
-| Dishwasher | `sensor.dishwasher_aebe90` | `dishwasher_aebe90` |
-| Microwave | `sensor.microwave_821ec2` | `microwave_821ec2` |
-| Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_b612c5` |
+| Airfryer | `sensor.airfryer_04d1f4` | `airfryer_current_consumption` |
+| Dishwasher | `sensor.dishwasher_aebe90` | `dishwasher_current_consumption` |
+| Microwave | `sensor.microwave_821ec2` | `microwave_current_consumption` |
+| Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_current_consumption` |
+
+(HA InfluxDB also has `kettle_current_consumption` and `toaster_current_consumption`,
+but Asma has no kettle/toaster registered in the cloud, so they are not published.)
 
 ## Phase 1 — Discover & verify the InfluxDB entity tags (browser)
 
@@ -58,17 +61,17 @@ the **InfluxDB tag** is what you must confirm in Phase 1:
    ```
    (`W` is the watts measurement. If there is no `W`, try `SHOW MEASUREMENTS` and look
    for the power unit measurement.)
-3. For each of Asma's 4 appliances, find the matching `entity_id` tag value. Confirm
-   whether HA stores it **with** the `sensor.` prefix or **without** it (HA usually
-   stores it without the domain prefix — e.g. `airfryer_04d1f4`).
+3. Confirm the 4 tags match the table above (`airfryer_current_consumption`, etc.).
+   These were already verified in Chronograf — this step is just a re-check that the
+   names haven't changed and that data is flowing.
 4. Sanity-check there is **recent** data, e.g.:
    ```
-   SELECT "value" FROM "W" WHERE "entity_id" = '<the airfryer tag you found>' ORDER BY time DESC LIMIT 5
+   SELECT "value" FROM "W" WHERE "entity_id" = 'airfryer_current_consumption' ORDER BY time DESC LIMIT 5
    ```
    You should see non-zero recent wattage when that appliance is on.
-5. **Record the exact tag string for each appliance.** This is the value you will put in
-   `power_entity_id`. If the tag is missing for an appliance, note it — that appliance
-   isn't reporting to InfluxDB and should be left out / flagged back to the researcher.
+5. If any of the 4 tags is missing or renamed, note it and adjust `power_entity_id`
+   accordingly in Phase 2. The committed config already has the confirmed names, so
+   normally no change is needed.
 
 > Cross-check (optional): Developer Tools → States, filter by the appliance name, and
 > confirm the power sensor exists and updates.
@@ -92,11 +95,9 @@ cd ~/wattwise/"Sensing Layer/deployments/asma-irfan"
 #    Replace <MQTT_PASSWORD> with the value the researcher gave you:
 sed -i 's|REPLACE_WITH_YOUR_MQTT_PASSWORD|<MQTT_PASSWORD>|' rpi_publisher_config.yaml
 
-# 3. If Phase 1 found InfluxDB tags different from the defaults, fix power_entity_id.
-#    The committed defaults are the no-prefix forms (airfryer_04d1f4, etc.).
-#    Example if your HA stores the full sensor. form:
-#    sed -i 's|power_entity_id: "airfryer_04d1f4"|power_entity_id: "sensor.airfryer_04d1f4"|' rpi_publisher_config.yaml
-nano rpi_publisher_config.yaml   # review; confirm each power_entity_id matches Phase 1
+# 3. (Usually skip.) The committed config already uses the confirmed InfluxDB tags
+#    (airfryer_current_consumption, etc.). Only edit if Phase 1 showed a renamed tag:
+nano rpi_publisher_config.yaml   # optional review
 
 # 4. Install: copies the script to /opt/wattwise, the config to /etc/wattwise,
 #    installs python deps, and registers the systemd service.
