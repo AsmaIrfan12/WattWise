@@ -5,7 +5,7 @@ pydantic-settings==2.7.0
 email-validator==2.2.0
 
 # Database
-sqlalchemy==2.0.36
+sqlalchemy==2.0.40
 aiomysql==0.2.0
 alembic==1.14.0
 

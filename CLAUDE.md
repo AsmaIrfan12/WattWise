@@ -15,7 +15,7 @@ Live production server: `https://www.talk2futurebuildings.systems` (Cloudflare T
 ### Backend (Server Side/backend)
 
 ```bash
-# Start full stack (from Server Side/)
+# Start full stack (from repo root: WattWise/)
 docker compose up --build
 
 # Start detached

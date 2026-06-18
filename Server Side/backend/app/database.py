@@ -5,7 +5,7 @@ from app.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    pool_pre_ping=True,
+    pool_pre_ping=False,   # aiomysql 0.2.0 ping() signature incompatible with SA pre_ping probe
     pool_size=10,
     max_overflow=20,
     echo=False

@@ -1,5 +1,7 @@
 services:
-  # ── MQTT Password Init (one-shot) ────────────────────────
+  # ── MQTT Password Init (one-shot, idempotent) ─────────────
+  # Generates the broker password file into a named volume.
+  # Uses rm -f so it is safe to re-run on every `compose up`.
   mosquitto-init:
     image: eclipse-mosquitto:2
     container_name: wattwise-mosquitto-init
@@ -58,8 +60,8 @@ services:
     container_name: wattwise-mosquitto
     restart: unless-stopped
     ports:
-      - "1883:1883"   # MQTT
-      - "9001:9001"   # WebSocket
+      - "1883:1883"   # MQTT TCP (RPi publishers)
+      - "9001:9001"   # MQTT WebSocket (nginx proxies to /mqtt)
     volumes:
       - ./Server Side/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./Server Side/mosquitto/config/acl.conf:/mosquitto/config/acl.conf:ro
@@ -102,7 +104,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"   # Local dev access only — block at firewall in production
     volumes:
       - mysql_data:/var/lib/mysql
       - ./Server Side/mysql/init:/docker-entrypoint-initdb.d
@@ -137,7 +139,7 @@ services:
       INFLUXDB_ADMIN_USER: ${INFLUX_USER}
       INFLUXDB_ADMIN_PASSWORD: ${INFLUX_PASS}
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"   # Local dev access only — block at firewall in production
     volumes:
       - influxdb_data:/var/lib/influxdb
     healthcheck:
@@ -161,65 +163,6 @@ services:
     networks:
       - wattwise-network
 
-  # ── DB Seed (one-shot, auto-exits) ───────────────────────
-  db-seed:
-    build:
-      context: ./Server Side/backend
-      dockerfile: Dockerfile
-    container_name: wattwise-db-seed
-    restart: "no"
-    env_file:
-      - ./Server Side/.env
-    working_dir: /app
-    command: python seed_participants.py
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - wattwise-network
-
-  # ── Bootstrap Aggregator (one-shot) ──────────────────────
-  # Scans all existing energy_readings on every `compose up` and rebuilds
-  # hourly_summary / daily_summary / home_daily_totals / energy_rankings
-  # so the admin dashboard shows historical charts immediately without
-  # waiting for the scheduled cron jobs to fire.
-  bootstrap-aggregator:
-    build:
-      context: ./Server Side/backend
-      dockerfile: Dockerfile
-    container_name: wattwise-bootstrap-aggregator
-    restart: "no"
-    env_file:
-      - ./Server Side/.env
-    working_dir: /app
-    command: python bootstrap_aggregator.py
-    depends_on:
-      backend:
-        condition: service_healthy
-      db-seed:
-        condition: service_completed_successfully
-    networks:
-      - wattwise-network
-
-  # ── Dummy Data Sender ── uncomment for local testing only ───────
-  dummy-data-sender:
-    build:
-      context: .
-      dockerfile: Dockerfile.dummy
-    container_name: wattwise-dummy-sender
-    restart: unless-stopped
-    env_file:
-      - ./Server Side/.env
-    # --no-backfill skips the initial historical flood; --interval 30 = one batch/30s
-    command: ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--no-backfill", "--interval", "30", "--csv", "participants.csv"]
-    depends_on:
-      backend:
-        condition: service_healthy
-      db-seed:
-        condition: service_completed_successfully
-    networks:
-      - wattwise-network
-
   # ── FastAPI Backend ──────────────────────────────────────
   backend:
     build:
@@ -230,13 +173,13 @@ services:
     env_file:
       - ./Server Side/.env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # Local dev access only — all public traffic routes via nginx
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      timeout: 10s
+      retries: 8        # Extra retries: first boot runs DB schema creation (DDL takes time)
+      start_period: 60s
     depends_on:
       mysql:
         condition: service_healthy
@@ -262,6 +205,46 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    networks:
+      - wattwise-network
+
+  # ── DB Seed (one-shot, auto-exits) ───────────────────────
+  # Creates/syncs all participant accounts from participants.csv + admin.
+  # Safe to re-run: upserts credentials, never duplicates users.
+  db-seed:
+    build:
+      context: ./Server Side/backend
+      dockerfile: Dockerfile
+    container_name: wattwise-db-seed
+    restart: "no"
+    env_file:
+      - ./Server Side/.env
+    working_dir: /app
+    command: python seed_participants.py
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - wattwise-network
+
+  # ── Bootstrap Aggregator (one-shot) ──────────────────────
+  # Rebuilds hourly/daily summaries and energy_rankings from existing
+  # readings so admin dashboard charts are populated immediately on startup.
+  bootstrap-aggregator:
+    build:
+      context: ./Server Side/backend
+      dockerfile: Dockerfile
+    container_name: wattwise-bootstrap-aggregator
+    restart: "no"
+    env_file:
+      - ./Server Side/.env
+    working_dir: /app
+    command: python bootstrap_aggregator.py
+    depends_on:
+      backend:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
     networks:
       - wattwise-network
 
@@ -327,7 +310,15 @@ services:
     networks:
       - wattwise-network
 
-  # ── HTTPS Nginx Reverse Proxy (TLS termination) ──────────
+  # ── Nginx Reverse Proxy ──────────────────────────────────
+  # Cloudflare Tunnel terminates TLS externally; nginx receives plain HTTP on :80.
+  # Route map:
+  #   /          → user-frontend  :3001
+  #   /admin/    → admin-frontend :3000
+  #   /api/*     → backend        :8000  (rate-limited: 60/min, auth: 10/min)
+  #   /health    → backend        :8000
+  #   /ws/*      → backend        :8000  (WebSocket)
+  #   /mqtt      → mosquitto      :9001  (WebSocket)
   nginx-proxy:
     build:
       context: ./Server Side/nginx-proxy
@@ -391,6 +382,29 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    networks:
+      - wattwise-network
+
+  # ── Dummy Data Sender ────────────────────────────────────
+  # Sends synthetic energy readings every 5 minutes (300s) for the
+  # participants.csv homes (synthetic accounts only). Starts automatically with
+  # `docker compose up` and restarts on reboot.
+  # SAFE alongside real RPis: it only feeds the synthetic participant accounts —
+  # it does NOT touch real homes like Asma / home_001 (different account).
+  dummy-data-sender:
+    build:
+      context: .
+      dockerfile: Dockerfile.dummy
+    container_name: wattwise-dummy-sender
+    restart: unless-stopped
+    env_file:
+      - ./Server Side/.env
+    command: ["python", "dummy_data_sender.py", "--url", "http://wattwise-backend:8000", "--no-backfill", "--interval", "300", "--csv", "participants.csv"]
+    depends_on:
+      backend:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
     networks:
       - wattwise-network
 
