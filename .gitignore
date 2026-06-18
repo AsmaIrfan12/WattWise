@@ -35,6 +35,9 @@ Server Side/passwd_out
 # ── Local IDE/agent state ─────────────────────────
 old/
 
+# ── Local credential records (never commit) ───────
+*.secrets.local
+
 # ── OS ────────────────────────────────────────────
 .DS_Store
 Thumbs.db

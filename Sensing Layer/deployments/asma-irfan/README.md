@@ -1,115 +1,131 @@
-# WattWise RPi Deployment Bundle — Asma Irfan
+# WattWise RPi Publisher — Deploy Guide
 
-Self-contained, copy-ready bundle for one real Raspberry Pi running Home Assistant.
-Copy this **entire folder** to the RPi and run the installer. Use it as the template
-for every other real RPi (see [Cloning for another RPi](#cloning-for-another-rpi)).
+This folder is a **working, proven** deployment for one Raspberry Pi running Home
+Assistant. It reads live appliance wattage from HA's local InfluxDB and publishes it
+to the WattWise cloud over MQTT every 30 s.
 
-| Item | Value |
-|------|-------|
-| Participant | Asma Irfan |
-| Cloud platform | `https://www.talk2futurebuildings.systems` |
-| MQTT topic | `wattwise/homes/{home_id}/devices/{device_id}/data` |
-| Publish interval | 30 s |
+- **`asma-irfan/` is a real, filled example** (home `home_001`). Copy it to make a new RPi.
+- Secrets (MQTT + InfluxDB passwords) are **placeholders here** — you fill them on the
+  device. Never commit real passwords.
 
-## What's in this folder
+---
 
-| File | Purpose |
-|------|---------|
-| `rpi_mqtt_publisher.py` | The publisher (canonical copy — reads local InfluxDB → cloud MQTT) |
-| `rpi_publisher_config.yaml` | Config **pre-filled for Asma** with `<PLACEHOLDER>`s to complete |
-| `install_publisher.sh` | Installs deps, copies files to `/opt/wattwise` + `/etc/wattwise`, registers the service |
-| `wattwise-publisher.service` | systemd unit (auto-start on boot, restart on failure) |
+## What you need before starting
 
-> The script and service file are **exact copies** of the canonical files in
-> `Sensing Layer/`. If you update those, re-copy them into this folder before
-> redeploying (see the clone command below).
+| Item | Where it comes from |
+|---|---|
+| HA + InfluxDB add-on already storing Tapo data | the RPi |
+| The home registered in the WattWise cloud (gives device `entity_id`s) | admin portal / researcher |
+| `home.id` + MQTT username + MQTT password | researcher (must match the broker ACL) |
+| InfluxDB username + password | the RPi's HA config (see step 3) |
 
-## Deploy on Asma's RPi
+---
 
+## Deploy on a Home Assistant OS RPi (the proven path)
+
+### 1. Get a terminal
+Install the **Advanced SSH & Web Terminal** add-on (Settings → Add-ons) and open it.
+
+### 2. Clone the repo
 ```bash
-# 1. On the RPi (HA terminal add-on or SSH), clone the repo:
 cd ~
 git clone https://github.com/AsmaIrfan12/WattWise.git wattwise || (cd ~/wattwise && git pull)
 cd ~/wattwise/"Sensing Layer/deployments/asma-irfan"
-
-# 2. Run the installer (copies script + config, installs deps, registers service):
-bash install_publisher.sh
+pip3 install paho-mqtt influxdb pyyaml      # usually already present
 ```
 
-The installer stops before starting the service because the config still has
-placeholders. Fill them in:
-
+### 3. Find this RPi's InfluxDB credentials
+The HA InfluxDB add-on has **auth enabled**, so the publisher needs a username/password.
+They're the same ones HA uses to write:
 ```bash
-sudo nano /etc/wattwise/publisher.yaml
+grep -iA15 'influxdb:' /config/configuration.yaml 2>/dev/null || grep -iA15 'influxdb:' /homeassistant/configuration.yaml
+grep -i influxdb_password /config/secrets.yaml 2>/dev/null || grep -i influxdb_password /homeassistant/secrets.yaml
 ```
+Note the `username` (usually `homeassistant`) and the `influxdb_password` value.
 
-Set the three required values (get them from the admin portal / your credentials slip):
+Confirm they work (replace `PASS`):
+```bash
+curl -s -G 'http://localhost:8086/query?db=homeassistant' -u 'homeassistant:PASS' \
+  --data-urlencode "q=SELECT \"value\" FROM \"W\" WHERE entity_id='microwave_current_consumption' ORDER BY time DESC LIMIT 1"; echo
+```
+A `"values":[[ ...,<wattage> ]]` response = good. (If you get an SSL error, the add-on
+is HTTPS-only → use `https://` + `-k` here and set `ssl: true` in the config below.)
 
+### 4. Fill in the config
+```bash
+nano rpi_publisher_config.yaml
+```
+Set the four placeholders:
 ```yaml
-home:
-  id: "<ASMA_HOME_ID>"                 # numeric homes.id from the admin portal
+influxdb:
+  username: "homeassistant"
+  password: "<influxdb_password from step 3>"
 mqtt:
-  username: "<ASMA_MQTT_USERNAME>"      # e.g. home_003 — must match broker ACL
-  password: "REPLACE_WITH_YOUR_MQTT_PASSWORD"
+  password: "<your MQTT password from the researcher>"
 ```
+Also confirm, per device, that `power_entity_id` matches the InfluxDB tag
+(`SHOW TAG VALUES FROM "W" WITH KEY = "entity_id"` in the InfluxDB add-on) and that
+`entity_id` matches the cloud device (leave it unless the researcher says otherwise).
 
-Then confirm each device `entity_id` matches Asma's Home Assistant entities
-(Developer Tools → States, or the InfluxDB add-on Chronograf:
-`SELECT * FROM "W" LIMIT 5`).
-
-Start it:
-
+### 5. Test in the foreground
 ```bash
-sudo systemctl start wattwise-publisher
-sudo systemctl status wattwise-publisher        # expect: active (running)
-sudo journalctl -u wattwise-publisher -f        # live logs
+python3 rpi_mqtt_publisher.py --config rpi_publisher_config.yaml
+```
+Success looks like:
+```
+✅ MQTT connected to <host>:443
+InfluxDB ping: ✅ OK
+🔄 Loop #1: 4 published, 0 errors
+```
+`Ctrl+C` to stop once you're happy. The home shows **online** in the admin portal within
+a minute. (A foreground run stops when you close the terminal — make it permanent next.)
+
+### 6. Make it permanent (survives reboots)
+HA OS has no `systemctl`, so run it as the **WattWise Publisher add-on**:
+see [`../../hass-addon/wattwise-publisher/README.md`](../../hass-addon/wattwise-publisher/README.md).
+Put the **same** filled values into `/config/wattwise_publisher.yaml` there.
+
+---
+
+## Deploy on a normal Raspberry Pi OS / Linux host (systemd)
+If the Pi is *not* Home Assistant OS and you have a real shell with `systemctl`:
+```bash
+cd ~/wattwise/"Sensing Layer/deployments/asma-irfan"
+nano rpi_publisher_config.yaml          # fill the placeholders (step 4 above)
+bash install_publisher.sh               # installs deps + config + systemd service
+sudo systemctl restart wattwise-publisher
+sudo journalctl -u wattwise-publisher -f
 ```
 
-Healthy output looks like:
+---
 
-```
-✅ Config loaded from /etc/wattwise/publisher.yaml (home_id=3, mqtt_user=home_003)
-📊 InfluxDB reader initialised: localhost:8086/homeassistant
-✅ MQTT connected to www.talk2futurebuildings.systems:443
-📤 Published kettle: {"power_watts": 2100.0, ...}
-```
-
-## Verify data is flowing
-
-- **Logs**: `🔄 Loop #N: 6 published, 0 errors`
-- **Cloud**: Asma's dashboard in the app, or admin portal, shows live wattage within ~5 min.
-- **Local InfluxDB** (sanity check the source): open the `a0d7b954_influxdb` add-on UI
-  and confirm the `W` / `kWh` measurements are receiving fresh Tapo readings.
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| `mqtt.password is blank or still contains the placeholder` | You skipped the config edit — set username/password |
-| `MQTT connect failed (rc=5)` | Wrong MQTT username/password |
-| `MQTT connect failed (rc=3)` | Broker unreachable — check RPi internet |
-| `InfluxDB ping: ❌ FAIL` | InfluxDB add-on not running, or auth required — set `influxdb.username/password` |
-| `No power data for <device>` | `entity_id` doesn't match HA — verify in Developer Tools → States |
-
-## Cloning for another RPi
-
-Each real RPi gets its own bundle so credentials and entity IDs never collide:
-
+## Make a new RPi from this one
 ```bash
 cd "Sensing Layer"
-
-# 1. Copy this bundle under the new participant's name
-cp -r deployments/asma-irfan deployments/<participant-name>
-
-# 2. Refresh the script/service from canonical (in case they changed)
-cp rpi_mqtt_publisher.py wattwise-publisher.service install_publisher.sh \
-   deployments/<participant-name>/
-
-# 3. Edit deployments/<participant-name>/rpi_publisher_config.yaml:
-#    - home.id, home.name
-#    - mqtt.username / mqtt.password
-#    - device entity_id values for that home
+cp -r deployments/asma-irfan deployments/<new-home>
+# refresh the shared script/installer in case they changed:
+cp rpi_mqtt_publisher.py install_publisher.sh wattwise-publisher.service deployments/<new-home>/
+# then edit deployments/<new-home>/rpi_publisher_config.yaml:
+#   home.id + mqtt.username + mqtt.password   (must match the broker ACL)
+#   each device entity_id (cloud) + power_entity_id (HA InfluxDB tag)
+#   influxdb.username + influxdb.password
 ```
-
 Keep `appliance_key` values unchanged — they map to WattWise's known appliance set.
-Never commit real MQTT passwords; leave the placeholder and fill it in on the device.
+
+---
+
+## Gotchas we hit (so you don't again)
+
+| Symptom | Cause → fix |
+|---|---|
+| `WebSocket handshake error` / `502` on connect | The cloud `/mqtt` path isn't routed to nginx→mosquitto. Point the tunnel/proxy `/mqtt` at nginx:80 (Cloudflare: add a `/mqtt` path rule → `http://localhost:80`). |
+| `Loop: 0 published` but `MQTT connected` + `ping OK` | InfluxDB **auth** — username/password missing or wrong. The `/ping` check passes without auth, but queries don't. Fill `influxdb.username/password` (step 3). |
+| `0 published` and curl returns data fine | A `power_entity_id` doesn't match the InfluxDB tag — recheck `SHOW TAG VALUES`. |
+| Home never goes online | "online" = a reading in the last 5 min. Confirm the loop says `N published, 0 errors`. |
+| `MQTT connect failed (rc=5)` | Wrong MQTT username/password, or `home.id` ≠ MQTT username (ACL mismatch). |
+
+## Moving the cloud to a DigitalOcean droplet
+Only `mqtt.host` changes — set it to the droplet's domain/IP. Keep `port: 443` +
+`tls: true` + `ws_path: /mqtt` if TLS is fronted by nginx/Caddy/Cloudflare; ensure that
+front door routes `/mqtt` to mosquitto's WebSocket (9001). For a same-network/dev broker,
+use `port: 1883`, `transport: "tcp"`, `tls: false` instead.

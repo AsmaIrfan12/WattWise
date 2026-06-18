@@ -65,21 +65,36 @@ home:
 # ── Local InfluxDB (Home Assistant's InfluxDB add-on on THIS RPi) ──────────────
 # The publisher runs on the RPi itself, so it reaches the add-on on localhost.
 # The Tailscale URL (…/a0d7b954_influxdb) is only the remote ingress UI — do NOT
-# use it here. Port 8086 is the add-on's host port; HA's default database is
-# "homeassistant". If Asma's InfluxDB add-on has auth enabled, fill username/password.
+# use it here. Port 8086 is the add-on's host port; HA's database is "homeassistant".
+#
+# CONFIRMED for Asma's RPi: the InfluxDB add-on has auth ENABLED, so username +
+# password are REQUIRED (without them every query is rejected and the publisher
+# silently reports "0 published"). The credentials are the ones HA itself uses —
+# find them on the RPi:
+#   username → /config/configuration.yaml  (influxdb: → username, usually "homeassistant")
+#   password → /config/secrets.yaml        (the value of influxdb_password)
+# Quick test:
+#   curl -s -G 'http://localhost:8086/query?db=homeassistant' -u 'homeassistant:<PASS>' \
+#     --data-urlencode "q=SELECT \"value\" FROM \"W\" WHERE entity_id='microwave_current_consumption' ORDER BY time DESC LIMIT 1"
 influxdb:
   host: "localhost"
   port: 8086
   database: "homeassistant"
-  username: ""                # leave blank if the InfluxDB add-on has no auth
-  password: ""
-  ssl: false
+  username: "homeassistant"                       # HA InfluxDB integration user (configuration.yaml)
+  password: "REPLACE_WITH_INFLUXDB_PASSWORD"      # from HA secrets.yaml: influxdb_password
+  ssl: false                                      # set true ONLY if the add-on serves HTTPS-only on 8086
 
 # ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
-# WebSocket via the Cloudflare-fronted nginx proxy. TLS is terminated by
-# Cloudflare; use the domain, never a bare IP.
+# `host` is the ONLY thing that changes when you move the cloud backend.
+#   • Cloudflare tunnel (current): www.talk2futurebuildings.systems, port 443, wss
+#     → REQUIRES that /mqtt is routed to nginx:80 (→ mosquitto:9001), not the admin
+#       frontend. If you get "WebSocket handshake error / 502", that route is wrong.
+#   • DigitalOcean droplet (later): set host to the droplet's domain or IP. If TLS
+#     is fronted (nginx/Caddy/Cloudflare) keep port 443 + tls:true + ws_path:/mqtt.
+#     For a plain LAN/dev broker you can instead use TCP: port 1883, transport "tcp",
+#     tls:false, ws_path unused.
 mqtt:
-  host: "www.talk2futurebuildings.systems"
+  host: "www.talk2futurebuildings.systems"     # ← change to your DigitalOcean domain/IP later
   port: 443
   transport: "websockets"
   ws_path: "/mqtt"
