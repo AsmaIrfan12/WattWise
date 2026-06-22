@@ -7,6 +7,41 @@ data sender. One `docker compose up` brings it all online, exactly like on your 
 The only things that don't come from `git clone` are the **secrets** (`.env` files, gitignored)
 and the **public address** (you'll use the droplet's IP instead of the Cloudflare domain).
 
+The server is **IP-agnostic** — nginx accepts any host, the dashboards call the API with
+relative paths, and the backend binds `0.0.0.0`. So you only set the address on the
+**clients** (the Android app and the RPis); the server needs no domain to run.
+
+---
+
+## Quick start (TL;DR)
+
+Docker + Compose already installed? Run these on the droplet:
+
+```bash
+# 1. Clone
+cd ~ && git clone https://github.com/AsmaIrfan12/WattWise.git wattwise && cd wattwise
+
+# 2. Firewall (once)
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp \
+  && sudo ufw allow 1883/tcp && sudo ufw --force enable
+
+# 3. Secrets — run these TWO lines on your LAPTOP (not the droplet):
+#    scp .env             "root@DROPLET_IP:~/wattwise/.env"
+#    scp "Server Side/.env" "root@DROPLET_IP:~/wattwise/Server Side/.env"
+#    Then on the droplet, add the IP to CORS in both files:
+#    ALLOWED_ORIGINS=...,http://DROPLET_IP,http://DROPLET_IP:3000
+
+# 4. Build + launch the whole stack
+docker compose up -d --build
+
+# 5. Verify (wait ~2-3 min for first-boot DB schema + seed)
+docker compose ps
+curl -s http://localhost/health        # -> {"status":"healthy"}
+```
+
+Then open **`http://DROPLET_IP:3000`** (admin) and **`http://DROPLET_IP`** (user dashboard),
+and point the app + RPis at `DROPLET_IP` (see §8). Full detail below.
+
 ---
 
 ## 1. Create the droplet
@@ -15,6 +50,7 @@ and the **public address** (you'll use the droplet's IP instead of the Cloudflar
 - Add your SSH key. Note the droplet's public IP (called `DROPLET_IP` below).
 
 ## 2. Install Docker + Compose (on the droplet)
+Skip if already installed (`docker compose version` prints v2).
 ```bash
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker
@@ -28,7 +64,7 @@ sudo ufw allow 80/tcp        # nginx → user dashboard, /api, /mqtt
 sudo ufw allow 3000/tcp      # admin portal (optionally restrict to your IP)
 sudo ufw allow 1883/tcp      # MQTT TCP for RPi publishers (see §8)
 # sudo ufw allow 443/tcp     # only if you add TLS (§9)
-sudo ufw enable
+sudo ufw --force enable      # --force avoids the interactive y/n prompt
 ```
 MySQL (3307) and InfluxDB (8086) are bound to `127.0.0.1` in compose — not public. Good.
 

@@ -17,6 +17,20 @@ log = logging.getLogger("db_seed")
 
 APPLIANCE_KEYS = ["kettle", "microwave", "washing_machine", "dishwasher", "toaster", "airfryer"]
 
+# Real RPi homes need DETERMINISTIC device entity_ids: the RPi publisher matches
+# readings to a device by entity_id, and its committed config uses these exact
+# strings (Sensing Layer/deployments/asma-irfan/rpi_publisher_config.yaml).
+# Synthetic homes keep random entity_ids; only these are pinned.
+# Map: email -> [(appliance_key, display_name, entity_id), ...]
+FIXED_DEVICES = {
+    "IrfanA1@cardiff.ac.uk": [  # Asma Irfan (home_001)
+        ("airfryer",        "Airfryer",        "sensor.airfryer_04d1f4"),
+        ("dishwasher",      "Dishwasher",      "sensor.dishwasher_aebe90"),
+        ("microwave",       "Microwave",       "sensor.microwave_821ec2"),
+        ("washing_machine", "Washing Machine", "sensor.washing_machine_b612c5"),
+    ],
+}
+
 async def upsert_admin(session: AsyncSession):
     """Ensure the system admin account exists and matches .env credentials."""
     email = settings.ADMIN_EMAIL
@@ -127,6 +141,24 @@ async def seed_db():
                 inserted_homes += 1
             
             # 3. Handle Devices
+            # Check existing devices
+            dev_result = await session.execute(select(Device).where(Device.home_id == home.id))
+            existing_devs = dev_result.scalars().all()
+            existing_entity_ids = {d.entity_id for d in existing_devs}
+
+            # Real RPi homes: create the exact, fixed devices (idempotent by entity_id)
+            # so the committed RPi publisher config matches this database.
+            if email in FIXED_DEVICES:
+                for ak, dev_name, eid in FIXED_DEVICES[email]:
+                    if eid not in existing_entity_ids:
+                        session.add(Device(
+                            home_id=home.id, name=dev_name, appliance_key=ak,
+                            entity_id=eid, device_type="appliance",
+                        ))
+                        inserted_devices += 1
+                continue  # skip the random-device path below
+
+            # Synthetic homes: random appliance set + random entity_ids.
             num_devices_to_add = 0
             try:
                 num_devices_csv = int(row.get("Devices", "0"))
@@ -134,10 +166,6 @@ async def seed_db():
             except ValueError:
                 num_devices_to_add = 3
 
-            # Check existing devices
-            dev_result = await session.execute(select(Device).where(Device.home_id == home.id))
-            existing_devs = dev_result.scalars().all()
-            
             if len(existing_devs) < 3:
                 # Add enough devices to reach at least 3
                 num_to_add = max(3 - len(existing_devs), num_devices_to_add - len(existing_devs))
