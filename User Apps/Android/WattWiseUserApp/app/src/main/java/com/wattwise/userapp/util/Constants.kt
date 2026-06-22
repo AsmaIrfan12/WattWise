@@ -12,12 +12,14 @@ package com.wattwise.userapp.util
 object Constants {
 
     // ── Production Server ────────────────────────────────────────
-    // Self-hosted Docker backend — update this to your server address.
-    // Tailscale RPI tunnel: homeassistant.tail5340f7.ts.net
-    // Local network fallback: http://192.168.x.x:8000
-    const val DEFAULT_SERVER_URL = "https://www.talk2futurebuildings.systems"
-    const val DEFAULT_PORT       = 443               // HTTPS
-    const val DEFAULT_API_PORT   = 8000              // FastAPI backend (Docker)
+    // Self-hosted Docker backend on a DigitalOcean droplet (Reserved IP).
+    // nginx serves the user dashboard + /api on port 80 (HTTP — bare IP, no TLS).
+    // Users can override this in Settings.
+    //   • Droplet (current): http://159.65.213.183  (port 80)
+    //   • With a domain + TLS later: https://your.domain (port 443)
+    const val DEFAULT_SERVER_URL = "http://159.65.213.183"
+    const val DEFAULT_PORT       = 80                // nginx HTTP (bare IP, no TLS yet)
+    const val DEFAULT_API_PORT   = 8000              // FastAPI backend (internal, behind nginx)
     const val DEFAULT_TIMEOUT    = 20
 
     // ── Notification Channels ────────────────────────────────────
