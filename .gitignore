@@ -20,7 +20,6 @@ local.properties
 .idea/
 build/
 captures/
-*.apk
 *.aab
 google-services.json
 keystore.properties

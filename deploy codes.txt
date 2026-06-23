@@ -1,0 +1,130 @@
+root password = SuhasDevmane@21054458cardiff
+droplet name- Wattwise
+address- https://cloud.digitalocean.com/droplets?i=6811d7
+
+
+root@wattwise
+
+
+sudo apt-get update && sudo apt-get upgrade
+
+sudo apt-get update
+sudo apt-get install docker-compose-plugin
+docker compose version
+
+
+# 0. (skip if Docker already installed)
+curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER && newgrp docker
+
+# 1. Clone
+cd ~ && git clone https://github.com/AsmaIrfan12/WattWise.git wattwise && cd wattwise
+
+# 2. Firewall
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp \
+  && sudo ufw allow 1883/tcp && sudo ufw --force enable
+
+# 3. Secrets — run these TWO lines on your LAPTOP (not the droplet):
+#    scp .env             "root@144.126.193.109:~/wattwise/.env"
+#    scp "Server Side/.env" "root@144.126.193.109:~/wattwise/Server Side/.env"
+#    then on the droplet add the IP to CORS in both files:
+#    ALLOWED_ORIGINS=...,http://144.126.193.109,http://144.126.193.109:3000
+
+# 4. Build + launch the whole stack
+docker compose up -d --build
+
+# 5. Verify (wait ~2-3 min for first-boot schema + seed)
+docker compose ps
+curl -s http://localhost/health        # -> {"status":"healthy"}
+
+cd ~/wattwise
+
+# 1. Pull the CPU fix
+git pull
+
+# 2. Add 4 GB swap — IMPORTANT on a 2 GB droplet so MySQL/InfluxDB don't get OOM-killed
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h        # confirm swap shows up
+
+# 3. Clear the half-created stack from the failed run (data volumes are kept)
+docker compose down
+
+# 4. Make sure the secret files are present (gitignored — scp from laptop if missing)
+ls -la .env "Server Side/.env"
+
+# 5. Launch
+docker compose up -d --build
+
+# 6. Watch it come up (first boot ~2-3 min: DB schema + seed)
+docker compose ps
+docker compose logs -f backend
+curl -s http://localhost/health        # -> {"status":"healthy"}
+
+# Open the firewall if you haven't:
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp && sudo ufw allow 1883/tcp && sudo ufw --force enable
+
+
+Then access (use the Reserved IP — it's stable)
+Admin portal: http://159.65.213.183:3000
+User dashboard / API: http://159.65.213.183
+RPi MQTT: host: 159.65.213.183, port: 1883, transport: "tcp", tls: false
+Android app: server URL http://159.65.213.183 (+ add it to network_security_config.xml cleartext, rebuild APK)
+Use the reserved IP 159.65.213.183 for the app and RPis — it survives droplet rebuilds, unlike the plain public IP.
+
+
+
+========== RPI SIDE =========
+
+Exactly 2 sections to edit in [rpi_publisher_config.yaml](Sensing Layer/deployments/asma-irfan/rpi_publisher_config.yaml)
+1. InfluxDB — do NOT change the host; only fill the password
+influxdb:
+  host: "localhost"          # ← LEAVE as localhost (InfluxDB is on the RPi, not the server)
+  port: 8086
+  database: "homeassistant"
+  username: "homeassistant"
+  password: "Nabira2012!"    # ← from HA secrets.yaml (was the REPLACE_… placeholder)
+  ssl: false
+  
+  2. MQTT — point at the droplet, switch to plain TCP (bare IP has no TLS)
+Replace the whole mqtt: block with:
+
+mqtt:
+  host: "159.65.213.183"     # ← droplet Reserved IP (was the Cloudflare domain)
+  port: 1883                 # ← was 443
+  transport: "tcp"           # ← was websockets
+  ws_path: ""                # ← unused for tcp
+  username: "home_001"
+  password: "WW_Home001_RPi_2026!"   # ← was the REPLACE_… placeholder
+  tls: false                 # ← was true
+
+Leave everything else unchanged — home.id: home_001, the 4 device entity_id/power_entity_id mappings, and publish_interval_seconds.
+
+Why TCP instead of wss
+Over a bare IP there's no TLS certificate, and the publisher forces TLS whenever transport: websockets — so ws:// on port 80 would fail the handshake. Direct MQTT TCP on 1883 is the clean no-TLS path. (You already opened 1883 in the firewall step.)
+
+Before you start it, confirm on the server side
+Droplet 1883 reachable — from the RPi: nc -vz 159.65.213.183 1883 (or the publisher will just retry).
+The droplet DB is seeded so Asma's 4 devices exist with the matching entity_ids (the seed now pins them, so a fresh docker compose up creates sensor.airfryer_04d1f4 etc. automatically).
+Run it
+Foreground test (same as before, in the SSH terminal):
+
+
+cd ~/wattwise/"Sensing Layer/deployments/asma-irfan"
+nano rpi_publisher_config.yaml        # make the 2 edits above
+python3 rpi_mqtt_publisher.py --config rpi_publisher_config.yaml
+Expect ✅ MQTT connected to 159.65.213.183:1883, InfluxDB ping: ✅ OK, Loop #1: 4 published, 0 errors. Then check http://159.65.213.183:3000 → Asma's home online.
+
+For permanent running (HA OS, survives reboot), put the same edited values into the add-on's /config/wattwise_publisher.yaml instead.
+
+
+
+How to populate rankings
+Let data accumulate — the dummy sender (every 5 min) + Asma's RPi need to run, and the daily aggregation/rankings jobs need to tick over. Give it ~2 days.
+Then either:
+Click ⚙ Run Classifier in the admin portal, or
+curl -X POST http://159.65.213.183/api/admin/personas/run-classifier -H "Authorization: Bearer <ADMIN_TOKEN>", or
+Re-run the whole bootstrap (aggregates all history + ranks + classifies):
+
+docker compose run --rm bootstrap-aggregator
+To set one manually: admin → user → assign persona (PATCH /api/admin/users/{id}/assign-persona).
+With your 50 dummy homes + Asma (51 > 12), once there are ≥2 days of rankings the K-means clustering will run and sort them into Eco Champion / Active Improver / Steady User / High Consumer / Disengaged.
