@@ -39,6 +39,52 @@ Full detail: [ARCHITECTURE.md](ARCHITECTURE.md). Codebase guide: [CLAUDE.md](CLA
 
 ---
 
+## ✨ Improved system (admin, analytics & alerts)
+
+Recent work made the platform real-time, self-healing and research-grade. Full plan:
+[docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md).
+
+**Dashboards & data**
+- **Never-empty charts** — the community-energy and live-telemetry endpoints fall back to
+  raw readings, and a **self-healing aggregation** job backfills the last 8 days on boot
+  and heals gaps every 30 min, so a fresh deploy populates with no manual steps.
+- **Real-time auto-refresh** — admin dashboard every 10 s, analytics every 60 s (only on
+  the visible tab, paused when hidden).
+- **Pipeline-health strip** on the dashboard shows the freshness of each stage (ingest →
+  hourly → daily → rankings → personas) so "everything is 0" is diagnosable at a glance.
+
+**Personas**
+- Re-classified **every 6 hours** (was weekly) for near-real-time segmentation.
+- New **radar visualization** of each persona's behavioural profile (efficiency, goal
+  adherence, decision response, low-consumption) — groups look distinct even at similar counts.
+
+**Analytics**
+- **Single-device deep-dive** — inspect any registered user's device (daily usage + peak,
+  hour-of-day load profile, window totals).
+- **Advanced compare** — device-vs-device across the same or different users, plus
+  **community-average**, **persona-average** and **period-over-period** overlays.
+
+**Alerts vs Notifications** (now distinct)
+- **Alerts** = system-generated from time-series analysis (peak, spike, standby, goal) —
+  interactive and decision-tracked.
+- **Notifications** = admin broadcasts (offers/messages).
+- The user app splits them via an Alerts/Notifications toggle, and push taps deep-link to
+  the right tab.
+
+**Backup & reliability**
+- **Per-user and multi-user data export** (JSON research bundles) on the admin Backup tab,
+  alongside the nightly full-DB dump.
+- **Single scheduler owner** — with 4 uvicorn workers, a MySQL advisory lock elects one
+  worker to run scheduled jobs, eliminating duplicate alerts/notifications.
+- **RPi publisher** surfaces InfluxDB query errors (throttled) instead of a silent
+  "0 published".
+
+> Fresh deploy note: give the aggregation ~30 min and the persona classifier one 6-hour
+> cycle to populate, then the community-energy, live-telemetry, persona-radar and analytics
+> views fill out with real data.
+
+---
+
 ## 2. Deploy to a DigitalOcean droplet (production)
 
 Full guide with every command: **[DEPLOY_DIGITALOCEAN.md](DEPLOY_DIGITALOCEAN.md)**. Summary:
