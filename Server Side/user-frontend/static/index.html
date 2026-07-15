@@ -545,6 +545,10 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
 
 <!-- ── NOTIFICATIONS ──────────────────────────────────────── -->
 <section id="s-notifications">
+  <div class="filter-bar" style="margin-bottom:8px">
+    <button class="filter-pill active" data-cat="alerts">⚠️ Alerts</button>
+    <button class="filter-pill" data-cat="notifications">📢 Notifications</button>
+  </div>
   <div class="filter-bar">
     <button class="filter-pill active" data-filter="all">All</button>
     <button class="filter-pill" data-filter="unread">Unread</button>
@@ -908,7 +912,8 @@ async function populatePersonaChip(u) {
 
 async function refreshNotifBadge() {
   try {
-    const notifs = await apiFetch('/notifications/?limit=5&filter=unread');
+    // Badge reflects pending system ALERTS (the interactive ones), not admin messages.
+    const notifs = await apiFetch('/notifications/?limit=5&filter=unread&category=alerts');
     _pendingNotifCount = notifs?.length || 0;
     document.getElementById('notif-badge').style.display = _pendingNotifCount > 0 ? 'block' : 'none';
   } catch {}
@@ -1551,12 +1556,16 @@ async function addDevice() {
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────
 let nFilter = 'all';
+let nCategory = 'alerts';   // 'alerts' (system, interactive) | 'notifications' (admin messages)
 
 async function loadNotifications() {
   try {
-    const notifs = await apiFetch('/notifications/?limit=50&filter=' + nFilter);
+    const notifs = await apiFetch('/notifications/?limit=50&filter=' + nFilter + '&category=' + nCategory);
     const el = document.getElementById('notif-list');
-    if (!notifs?.length) { el.innerHTML = '<div class="empty" style="padding:24px">No notifications</div>'; return; }
+    if (!notifs?.length) {
+      const empty = nCategory === 'notifications' ? 'No messages from the team yet' : 'No alerts — your usage looks fine 👍';
+      el.innerHTML = '<div class="empty" style="padding:24px">' + empty + '</div>'; return;
+    }
     el.innerHTML = notifs.map(n => `<div style="padding:0 14px">${notifHTML(n, true)}</div>`).join('');
     // Mark unread ones as read after 2s
     const unread = notifs.filter(n => !n.is_read).map(n => n.id);
@@ -1573,12 +1582,22 @@ async function markRead(ids) {
 
 function filterNotifs(f) {
   nFilter = f;
-  document.querySelectorAll('.filter-pill').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  document.querySelectorAll('.filter-pill[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
   loadNotifications();
 }
 
-document.querySelectorAll('.filter-pill').forEach(pill => {
+function switchNotifCategory(cat) {
+  nCategory = cat;
+  document.querySelectorAll('.filter-pill[data-cat]').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+  loadNotifications();
+  refreshNotifBadge();
+}
+
+document.querySelectorAll('.filter-pill[data-filter]').forEach(pill => {
   pill.addEventListener('click', () => filterNotifs(pill.dataset.filter));
+});
+document.querySelectorAll('.filter-pill[data-cat]').forEach(pill => {
+  pill.addEventListener('click', () => switchNotifCategory(pill.dataset.cat));
 });
 
 function notifHTML(n, showActions = false) {

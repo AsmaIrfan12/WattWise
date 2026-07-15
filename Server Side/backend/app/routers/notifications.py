@@ -13,6 +13,21 @@ from app.schemas import NotificationResponse, NotificationStatsResponse
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
 
+# ── Alerts vs Notifications ───────────────────────────────────
+# "Notifications" = admin-authored broadcasts (offers / messages). Everything else is a
+# system-generated "Alert" from time-series analysis (peak, spike, standby, goal, tips) —
+# interactive and decision-tracked. We derive the split from notification_type so no
+# schema migration is needed.
+ADMIN_NOTIFICATION_TYPES = ("ADMIN_BROADCAST",)
+
+
+def _apply_category(q, category: Optional[str]):
+    if category == "alerts":
+        return q.where(Notification.notification_type.notin_(ADMIN_NOTIFICATION_TYPES))
+    if category == "notifications":
+        return q.where(Notification.notification_type.in_(ADMIN_NOTIFICATION_TYPES))
+    return q
+
 
 def _get_user_id(request: Request) -> int:
     user_id = getattr(request.state, "user_id", None)
@@ -28,6 +43,7 @@ async def list_notifications(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     filter: Optional[str] = Query(default="all"),
+    category: Optional[str] = Query(default="all", description="all | alerts | notifications"),
 ):
     user_id = _get_user_id(request)
     q = select(Notification).where(Notification.user_id == user_id)
@@ -39,13 +55,17 @@ async def list_notifications(
         q = q.where(Notification.dismissed)
     elif filter == "action_required":
         q = q.where(Notification.requires_user_action, ~Notification.dismissed)
+    q = _apply_category(q, category)
     q = q.order_by(Notification.created_at.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(q)
     return result.scalars().all()
 
 
 @router.get("/stats", response_model=NotificationStatsResponse)
-async def get_stats(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_stats(
+    request: Request, db: AsyncSession = Depends(get_db),
+    category: Optional[str] = Query(default="all", description="all | alerts | notifications"),
+):
     user_id = _get_user_id(request)
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -53,6 +73,7 @@ async def get_stats(request: Request, db: AsyncSession = Depends(get_db)):
         q = select(func.count(Notification.id)).where(Notification.user_id == user_id)
         if extra_where is not None:
             q = q.where(extra_where)
+        q = _apply_category(q, category)
         r = await db.execute(q)
         return r.scalar() or 0
 
