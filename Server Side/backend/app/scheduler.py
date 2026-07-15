@@ -8,7 +8,7 @@ notification delivery, ranking computation, and decision impact tracking.
 import logging
 from datetime import datetime, timedelta, date
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 
 from app.database import AsyncSessionLocal
 from app.models import (
@@ -741,3 +741,45 @@ async def aggregate_all_history() -> dict:
         "first_ts": first_ts.isoformat(),
         "last_ts": last_ts.isoformat(),
     }
+
+
+async def backfill_recent(hours: int = 192) -> dict:
+    """
+    Bounded self-healing aggregation: (re)aggregate the last `hours` hours and
+    the days they touch. Unlike aggregate_all_history (which scans ALL history
+    and is slow), this covers just the recent window that the dashboards chart,
+    so it is cheap enough to run at every startup. Idempotent.
+
+    Default 192 h (8 days) covers the 7-day community-energy chart plus margin.
+
+    Guarded by a MySQL advisory lock so that with uvicorn's 4 workers only ONE
+    backfill runs at a time (concurrent runs race on the summary unique keys).
+    """
+    async with AsyncSessionLocal() as lockdb:
+        got = (await lockdb.execute(text("SELECT GET_LOCK('ww_backfill', 0)"))).scalar()
+        if not got:
+            logger.info("Recent backfill skipped — another worker holds the lock")
+            return {"skipped": True}
+        try:
+            now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+            start = now - timedelta(hours=hours)
+
+            hours_processed = 0
+            t = start + timedelta(hours=1)
+            while t <= now + timedelta(hours=1):
+                await aggregate_hourly(t)
+                hours_processed += 1
+                t += timedelta(hours=1)
+
+            days_processed = 0
+            d = start.date()
+            today = datetime.utcnow().date()
+            while d <= today:
+                await aggregate_daily(d)
+                days_processed += 1
+                d += timedelta(days=1)
+
+            logger.info("Recent backfill complete: %d hours, %d days", hours_processed, days_processed)
+            return {"hours_processed": hours_processed, "days_processed": days_processed}
+        finally:
+            await lockdb.execute(text("SELECT RELEASE_LOCK('ww_backfill')"))

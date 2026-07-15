@@ -1,7 +1,8 @@
 import os
+import asyncio
 import logging
 import logging.config
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -21,6 +22,7 @@ from app.scheduler import (
     send_peak_reminder, send_daily_report,
     calculate_decision_impacts, compute_rankings,
     cleanup_old_notifications, detect_and_notify_anomalies,
+    backfill_recent,
 )
 from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
@@ -172,6 +174,21 @@ async def _job_anomaly_scan():
     )
 
 
+async def _job_backfill_recent():
+    """Every 30 min: heal the last 24 h of hourly/daily summaries so dashboards stay current."""
+    await _run_tracked_job("backfill_recent", lambda: backfill_recent(hours=24))
+
+
+async def _job_backfill_startup():
+    """Once, shortly after boot: backfill the last 8 days so charts populate immediately
+    (covers the community-energy window without the slow full-history scan)."""
+    try:
+        res = await backfill_recent(hours=192)
+        logger.info("Startup backfill: %s", res)
+    except Exception as e:
+        logger.warning("Startup backfill failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -214,12 +231,19 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
     scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
     scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
-    scheduler.add_job(_job_classify_personas,  "cron",       day_of_week="sun", hour=2,    minute=0,  id="classify_personas")
+    scheduler.add_job(_job_classify_personas,  "interval",   hours=6,                     id="classify_personas")
     scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
     scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
     scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
+    # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
+    scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
     scheduler.start()
-    logger.info("✅ Scheduler started with 13 jobs")
+    logger.info("✅ Scheduler started with 14 jobs (personas every 6 h; self-healing backfill)")
+
+    # One-time 8-day backfill shortly after boot so charts populate immediately.
+    # Run as a background task (not a scheduler 'date' job) to avoid timezone-vs-naive
+    # misfire between datetime.now() and the scheduler's Europe/London zone.
+    asyncio.create_task(_job_backfill_startup())
 
     yield
 

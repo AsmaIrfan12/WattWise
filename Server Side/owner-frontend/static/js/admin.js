@@ -1772,6 +1772,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Kick off the 10-second auto-refresh for the MQTT broker panel
   startMqttBrokerAutoRefresh();
 
+  // Dashboard auto-refresh (10 s) + Analytics auto-refresh (60 s). Only fire when the
+  // relevant tab is active and the window is visible — no wasted polling on hidden tabs.
+  setInterval(() => {
+    if (!document.hidden && document.getElementById('section-dashboard')?.classList.contains('active')) loadDashboard();
+  }, 10000);
+  setInterval(() => {
+    if (!document.hidden && document.getElementById('section-analytics')?.classList.contains('active')) loadAnalytics();
+  }, 60000);
+
   // Notifications form
   document.getElementById('notif-form').addEventListener('submit', async e => {
     e.preventDefault();

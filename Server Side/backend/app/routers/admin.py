@@ -686,15 +686,38 @@ async def get_energy_analytics(
             .order_by(HourlySummary.hour_start.asc())
         )
         rows = result.all()
+        if rows:
+            return [
+                {
+                    "date": r.hour_start.isoformat(),
+                    "total_kwh": round(float(r.total_kwh or 0), 4),
+                    "total_cost_gbp": round(float(r.total_kwh or 0) * 0.27, 4),
+                    "avg_home_kwh": round(float(r.total_kwh or 0), 4),
+                    "active_homes": r.active_devices,
+                }
+                for r in rows
+            ]
+        # Fallback: hourly summaries not built yet — bucket raw readings by hour.
+        hour_expr = func.date_format(EnergyReading.recorded_at, "%Y-%m-%d %H:00:00")
+        raw = await db.execute(
+            select(
+                hour_expr.label("h"),
+                func.sum(EnergyReading.energy_kwh).label("kwh"),
+                func.count(func.distinct(EnergyReading.device_id)).label("devs"),
+            )
+            .where(EnergyReading.recorded_at >= since_ts)
+            .group_by(hour_expr)
+            .order_by(hour_expr.asc())
+        )
         return [
             {
-                "date": r.hour_start.isoformat(),
-                "total_kwh": round(float(r.total_kwh or 0), 4),
-                "total_cost_gbp": round(float(r.total_kwh or 0) * 0.27, 4),
-                "avg_home_kwh": round(float(r.total_kwh or 0), 4),
-                "active_homes": r.active_devices,
+                "date": str(r.h).replace(" ", "T"),
+                "total_kwh": round(float(r.kwh or 0), 4),
+                "total_cost_gbp": round(float(r.kwh or 0) * 0.27, 4),
+                "avg_home_kwh": round(float(r.kwh or 0), 4),
+                "active_homes": int(r.devs or 0),
             }
-            for r in rows
+            for r in raw.all()
         ]
 
     # ── Daily mode ───────────────────────────────────────────
@@ -718,15 +741,44 @@ async def get_energy_analytics(
         .order_by(HomeDailyTotal.day_date.asc())
     )
     rows = result.all()
+    if rows:
+        return [
+            {
+                "date": r.day_date.isoformat(),
+                "total_kwh": round(float(r.total_kwh or 0), 2),
+                "total_cost_gbp": round(float(r.total_cost or 0), 2),
+                "avg_home_kwh": round(float(r.avg_kwh or 0), 2),
+                "active_homes": r.active_homes,
+            }
+            for r in rows
+        ]
+
+    # Fallback: the daily summaries aren't built yet (fresh deploy / gap) — aggregate raw
+    # readings by day directly so the chart is never empty.
+    rate = settings.ENERGY_STANDARD_PRICE_PER_KWH or 0.27
+    start_dt = datetime.combine(since, datetime.min.time())
+    end_dt = datetime.combine(until, datetime.min.time()) + timedelta(days=1)
+    raw = await db.execute(
+        select(
+            func.date(EnergyReading.recorded_at).label("d"),
+            func.sum(EnergyReading.energy_kwh).label("kwh"),
+            func.count(func.distinct(Home.id)).label("homes"),
+        )
+        .join(Device, EnergyReading.device_id == Device.id)
+        .join(Home, Device.home_id == Home.id)
+        .where(EnergyReading.recorded_at >= start_dt, EnergyReading.recorded_at < end_dt)
+        .group_by(func.date(EnergyReading.recorded_at))
+        .order_by(func.date(EnergyReading.recorded_at).asc())
+    )
     return [
         {
-            "date": r.day_date.isoformat(),
-            "total_kwh": round(float(r.total_kwh or 0), 2),
-            "total_cost_gbp": round(float(r.total_cost or 0), 2),
-            "avg_home_kwh": round(float(r.avg_kwh or 0), 2),
-            "active_homes": r.active_homes,
+            "date": str(r.d),
+            "total_kwh": round(float(r.kwh or 0), 2),
+            "total_cost_gbp": round(float(r.kwh or 0) * rate, 2),
+            "avg_home_kwh": round(float(r.kwh or 0) / max(int(r.homes or 1), 1), 2),
+            "active_homes": int(r.homes or 0),
         }
-        for r in rows
+        for r in raw.all()
     ]
 
 
@@ -770,6 +822,46 @@ async def get_device_timeseries(
 
     result = await db.execute(q)
     rows = result.all()
+
+    if not rows:
+        # Fallback: hourly summaries not built yet — bucket raw readings per device/hour.
+        hour_expr = func.date_format(EnergyReading.recorded_at, "%Y-%m-%d %H:00:00")
+        q2 = (
+            select(
+                EnergyReading.device_id,
+                hour_expr.label("h"),
+                func.sum(EnergyReading.energy_kwh).label("kwh"),
+                func.avg(EnergyReading.power_watts).label("w"),
+                Device.name.label("device_name"),
+                Device.appliance_key,
+                Home.id.label("home_id"),
+                Home.home_name,
+            )
+            .join(Device, EnergyReading.device_id == Device.id)
+            .join(Home, Device.home_id == Home.id)
+            .where(EnergyReading.recorded_at >= since_ts, Device.is_active.is_(True))
+            .group_by(EnergyReading.device_id, hour_expr, Device.name,
+                      Device.appliance_key, Home.id, Home.home_name)
+            .order_by(Home.id, EnergyReading.device_id, hour_expr.asc())
+        )
+        if home_id is not None:
+            q2 = q2.where(Home.id == home_id)
+        series2: dict[int, dict] = {}
+        for r in (await db.execute(q2)).all():
+            s = series2.setdefault(r.device_id, {
+                "device_id": r.device_id, "device_name": r.device_name,
+                "appliance_key": r.appliance_key, "home_id": r.home_id,
+                "home_name": r.home_name, "points": [],
+            })
+            s["points"].append({
+                "ts": str(r.h).replace(" ", "T"),
+                "kwh": round(float(r.kwh or 0), 4),
+                "avg_watts": round(float(r.w or 0), 2),
+            })
+        return {
+            "window_hours": hours, "since": since_ts.isoformat(),
+            "until": now.isoformat(), "devices": list(series2.values()),
+        }
 
     series: dict[int, dict] = {}
     for r in rows:
