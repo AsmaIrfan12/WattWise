@@ -780,6 +780,21 @@ function goSection(name) {
   loaders[name]?.();
 }
 
+// Honour a push deep-link like /notifications?category=notifications — open the
+// alerts tab on the right sub-category (set by WattWiseNotificationRouter).
+function applyDeepLink() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const cat = params.get('category');
+    if (location.pathname.includes('notification') || cat) {
+      goSection('notifications');
+      if (cat === 'alerts' || cat === 'notifications') {
+        setTimeout(() => switchNotifCategory(cat), 60);
+      }
+    }
+  } catch {}
+}
+
 // ── Icons ─────────────────────────────────────────────────────
 function iconFor(key) {
   const m = { kettle: '☕', washing_machine: '👕', dryer: '🔄', dishwasher: '🍽️', microwave: '📡', gaming_console: '🎮', tv: '📺', toaster: '🍞', airfryer: '🍟', cooker: '🍳', other: '🔌', xbox: '🎮' };
@@ -872,6 +887,7 @@ async function init() {
     await populatePersonaChip(userData);
     await loadHome();
     refreshNotifBadge();
+    applyDeepLink();
     if (_homeRefreshTimer) clearInterval(_homeRefreshTimer);
     _homeRefreshTimer = setInterval(() => {
       if (!token || document.hidden) return;

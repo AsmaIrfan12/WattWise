@@ -493,8 +493,10 @@
             </div>
           </div>
           
-          <div style="display:flex; align-items:flex-end; gap:14px;">
+          <div style="display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap">
             <label class="checkbox-label" style="white-space:nowrap"><input type="checkbox" id="compare-community-avg"> vs Community avg</label>
+            <label class="checkbox-label" style="white-space:nowrap"><input type="checkbox" id="compare-persona-avg"> vs Persona avg</label>
+            <label class="checkbox-label" style="white-space:nowrap"><input type="checkbox" id="compare-prev-period"> Prev period</label>
             <button class="btn-primary" id="btn-run-compare" style="height:100%; min-height:40px; padding:0 24px">Compare</button>
           </div>
         </div>
@@ -502,6 +504,21 @@
       <div style="padding:20px">
         <canvas id="chart-advanced-compare" height="100"></canvas>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title">Single-Device Deep-Dive</h2>
+        <button class="btn-primary btn-sm" onclick="loadDeviceReport()">Load</button>
+      </div>
+      <p class="card-desc">Full analysis of one device for any registered user — daily usage, hour-of-day load profile and window totals.</p>
+      <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:0 0 12px">
+        <select id="dd-device-select" style="min-width:320px; padding:6px"></select>
+        <label class="card-desc" style="margin:0">Days: <input type="number" id="dd-days" value="14" min="1" max="90" style="width:64px"></label>
+        <span id="dd-totals" class="card-desc" style="margin:0"></span>
+      </div>
+      <div style="padding:6px 0"><canvas id="chart-dd-daily" height="90"></canvas></div>
+      <div style="padding:6px 0"><canvas id="chart-dd-profile" height="90"></canvas></div>
     </div>
   </section>
 

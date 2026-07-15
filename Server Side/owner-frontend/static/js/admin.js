@@ -1105,6 +1105,7 @@ function filterUsersByPersona(personaId) {
 
 // ── Analytics ─────────────────────────────────────────────────
 async function loadAnalytics(startDate, endDate) {
+  initDeviceDeepDive();
   const start = startDate || document.getElementById('analytics-start')?.value;
   const end = endDate || document.getElementById('analytics-end')?.value;
 
@@ -1164,6 +1165,40 @@ function exportCsv(data) {
   a.click();
 }
 
+// ── Single-Device Deep-Dive ───────────────────────────────────
+async function initDeviceDeepDive() {
+  const sel = document.getElementById('dd-device-select');
+  if (!sel || sel.dataset.loaded) return;
+  try {
+    const devices = await api('/api/admin/devices/status');
+    sel.innerHTML = (devices || []).map(d =>
+      `<option value="${d.device_id}">${DOMPurify.sanitize(d.device_name)} — ${DOMPurify.sanitize(d.user)} (${DOMPurify.sanitize(d.home)})</option>`).join('');
+    sel.dataset.loaded = '1';
+  } catch (err) { console.warn('deep-dive devices:', err.message); }
+}
+
+async function loadDeviceReport() {
+  const sel = document.getElementById('dd-device-select');
+  const did = sel?.value;
+  if (!did) { toast('Pick a device', 'error'); return; }
+  const days = parseInt(document.getElementById('dd-days')?.value || '14');
+  try {
+    const r = await api(`/api/admin/analytics/device/${did}/report?days=${days}`);
+    document.getElementById('dd-totals').textContent =
+      `${r.user.name} · ${r.totals.total_kwh} kWh · £${r.totals.total_cost_gbp} · ${r.totals.avg_daily_kwh} kWh/day avg`;
+    const daily = r.daily || [];
+    createLineChart('chart-dd-daily', daily.map(p => p.date), [
+      { label: 'kWh/day', data: daily.map(p => p.total_kwh), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.35 },
+      { label: 'Peak W', data: daily.map(p => p.peak_watts), borderColor: '#f59e0b', backgroundColor: 'transparent', yAxisID: 'y2', tension: 0.35 },
+    ], { scales: { y2: { position: 'right', grid: { display: false }, ticks: { color: '#f59e0b' } } } });
+    const prof = r.hourly_profile || [];
+    createBarChart('chart-dd-profile', prof.map(p => p.hour + ':00'), [
+      { label: 'Avg W by hour-of-day', data: prof.map(p => p.avg_watts), backgroundColor: 'rgba(16,185,129,0.7)', borderRadius: 3 },
+    ]);
+    toast('Loaded device report', 'success');
+  } catch (err) { toast('Device report failed: ' + err.message, 'error'); }
+}
+
 // ── Advanced Comparison ───────────────────────────────────────
 let _lastComparisonData = null;
 
@@ -1212,6 +1247,8 @@ async function initAdvancedComparison() {
     const start_date = document.getElementById('compare-start').value;
     const end_date = document.getElementById('compare-end').value;
     const include_community_avg = document.getElementById('compare-community-avg')?.checked || false;
+    const include_persona_avg = document.getElementById('compare-persona-avg')?.checked || false;
+    const period_over_period = document.getElementById('compare-prev-period')?.checked || false;
 
     if (!entity_ids.length || !metrics.length) {
       toast('Please select at least one target and one metric.', 'error');
@@ -1225,7 +1262,7 @@ async function initAdvancedComparison() {
     try {
       const res = await api('/api/admin/analytics/compare', {
         method: 'POST',
-        body: JSON.stringify({ entity_type, entity_ids, start_date, end_date, metrics, include_community_avg })
+        body: JSON.stringify({ entity_type, entity_ids, start_date, end_date, metrics, include_community_avg, include_persona_avg, period_over_period })
       });
       _lastComparisonData = { datasets: res.datasets, metrics };
       renderComparisonChart(res.datasets, metrics);

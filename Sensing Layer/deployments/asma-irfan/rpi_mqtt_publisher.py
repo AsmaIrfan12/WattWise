@@ -88,6 +88,7 @@ class InfluxReader:
             f"📊 InfluxDB reader initialised: "
             f"{cfg.get('host')}:{cfg.get('port')}/{cfg.get('database')}"
         )
+        self._last_err_log = 0.0   # monotonic ts of last throttled query-error warning
 
     def get_latest(self, entity_id: str, measurement: str = "state") -> dict | None:
         """Get most recent value for an entity_id. Uses parameterized WHERE clause."""
@@ -116,9 +117,12 @@ class InfluxReader:
     def get_energy_kwh(self, entity_id: str) -> dict | None:
         """Fetch latest energy kWh reading. Sanitizes entity_id before querying."""
         import re
+        import math
+        import time as _time
         safe_entity = re.sub(r"[^a-zA-Z0-9_\.\-]", "", entity_id)
         entity_id = safe_entity
 
+        last_error = None
         for measurement in ["kWh", "W", "state"]:
             try:
                 query = (
@@ -130,13 +134,25 @@ class InfluxReader:
                 if result:
                     raw = float(result[0].get("value", 0) or 0)
                     # Validate: reject NaN, Inf, negative, impossibly large values
-                    import math
                     if math.isnan(raw) or math.isinf(raw) or raw < 0 or raw > 50000:
                         logger.warning(f"Invalid sensor value for {entity_id}: {raw}")
                         return None
                     return {"value": raw, "measurement": measurement}
-            except Exception:
+            except Exception as e:
+                last_error = e
                 continue
+        # Surface query errors instead of silently returning 0-published. Throttled to
+        # once per 5 min so a persistent problem (e.g. wrong influxdb.username/password,
+        # or the add-on requiring auth) is visible in the logs without spamming.
+        if last_error is not None:
+            now = _time.monotonic()
+            if now - self._last_err_log > 300:
+                self._last_err_log = now
+                logger.warning(
+                    f"InfluxDB query failed for '{entity_id}': {last_error} — check "
+                    f"influxdb.username/password in the config and that the InfluxDB "
+                    f"add-on is reachable (queries need auth even when /ping succeeds)."
+                )
         return None
 
     def ping(self) -> bool:

@@ -44,20 +44,30 @@ object WattWiseNotificationRouter {
     fun resolveDeepLinkUrl(data: Bundle?, baseUrl: String = Constants.DEFAULT_SERVER_URL): String? {
         if (data == null) return null
 
-        val type         = data.getString("type") ?: return null
-        val applianceKey = data.getString("applianceKey") ?: return null
-        val historyId    = data.getString("historyId")
-        val screen       = data.getString("screen", "DeviceDetails")
+        val type             = data.getString("type") ?: ""
+        val notificationType = data.getString("notification_type") ?: ""
+        val applianceKey     = data.getString("applianceKey")
+        val historyId        = data.getString("historyId")
+        val screen           = data.getString("screen", "")
 
-        Log.d(TAG, "Resolving deep-link: type=$type applianceKey=$applianceKey screen=$screen")
+        // Alerts = system-generated (interactive); Notifications = admin broadcasts.
+        val isAdminMessage = notificationType == "ADMIN_BROADCAST" || screen == "Notifications"
+        val category = if (isAdminMessage) "notifications" else "alerts"
+        val highlight = if (historyId != null) "&highlight=$historyId" else ""
 
-        // Build deep-link URL for the user dashboard WebView
+        Log.d(TAG, "Resolving deep-link: type=$type notifType=$notificationType appliance=$applianceKey screen=$screen")
+
+        // Admin broadcasts (and poll-worker taps) carry no applianceKey — route them to the
+        // correct notifications sub-tab instead of returning null (which opened no tab at all).
+        if (isAdminMessage || applianceKey == null) {
+            return "$baseUrl/notifications?category=$category$highlight"
+        }
+
         return when (screen) {
             "DeviceDetails" -> "$baseUrl/device/$applianceKey?notification=$historyId&type=$type"
-            "Notifications" -> "$baseUrl/notifications?highlight=$historyId"
             "Rankings"      -> "$baseUrl/rankings"
             "Goals"         -> "$baseUrl/goals"
-            else            -> "$baseUrl/dashboard"
+            else            -> "$baseUrl/notifications?category=alerts$highlight"
         }
     }
 

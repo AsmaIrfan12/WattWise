@@ -974,131 +974,117 @@ class CompareRequest(BaseModel):
     end_date: str
     metrics: List[str]  # e.g., ["total_kwh", "cost_gbp", "active_minutes", "peak_watts", "efficiency_score"]
     include_community_avg: bool = False  # add a per-home community-average benchmark series
+    include_persona_avg: bool = False    # add the first user's persona-average series (user type)
+    period_over_period: bool = False     # overlay each entity's previous equal-length period
+
+
+def _cmp_point(date_iso: str, r, metrics, cost_attr: str = "cost_gbp") -> dict:
+    dp = {"date": date_iso}
+    if "total_kwh" in metrics: dp["total_kwh"] = round(float(getattr(r, "total_kwh", 0) or 0), 2)
+    if "cost_gbp" in metrics: dp["cost_gbp"] = round(float(getattr(r, cost_attr, 0) or 0), 2)
+    if "peak_watts" in metrics: dp["peak_watts"] = round(float(getattr(r, "peak_watts", 0) or 0), 2)
+    if "avg_watts" in metrics: dp["avg_watts"] = round(float(getattr(r, "avg_watts", 0) or 0), 2)
+    if "active_minutes" in metrics: dp["active_minutes"] = getattr(r, "active_minutes", None) or 0
+    if "efficiency_score" in metrics: dp["efficiency_score"] = round(float(getattr(r, "efficiency_score", 0) or 0), 2)
+    return dp
+
+
+async def _compare_user_points(db, uid, since, until, metrics, shift_days=0):
+    q = (
+        select(
+            HomeDailyTotal.day_date,
+            func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
+            func.sum(HomeDailyTotal.total_cost_gbp).label("cost_gbp"),
+            func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
+            (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
+            func.avg(HomeDailyTotal.efficiency_score).label("efficiency_score"),
+        )
+        .join(Home, HomeDailyTotal.home_id == Home.id)
+        .where(Home.user_id == uid, HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until)
+        .group_by(HomeDailyTotal.day_date).order_by(HomeDailyTotal.day_date.asc())
+    )
+    rows = (await db.execute(q)).all()
+    return [_cmp_point((r.day_date + timedelta(days=shift_days)).isoformat(), r, metrics) for r in rows]
+
+
+async def _compare_device_points(db, did, since, until, metrics, shift_days=0):
+    rows = (await db.execute(
+        select(DailySummary)
+        .where(DailySummary.device_id == did, DailySummary.day_date >= since, DailySummary.day_date <= until)
+        .order_by(DailySummary.day_date.asc())
+    )).scalars().all()
+    return [_cmp_point((r.day_date + timedelta(days=shift_days)).isoformat(), r, metrics,
+                       cost_attr="estimated_cost_gbp") for r in rows]
+
+
+async def _avg_series(db, since, until, metrics, name, persona_id=None):
+    """Per-home average series across the whole community (persona_id=None) or one persona."""
+    denom = func.count(func.distinct(User.id)) if persona_id else func.count(func.distinct(HomeDailyTotal.home_id))
+    q = select(
+        HomeDailyTotal.day_date,
+        (func.sum(HomeDailyTotal.total_kwh) / denom).label("total_kwh"),
+        (func.sum(HomeDailyTotal.total_cost_gbp) / denom).label("cost_gbp"),
+        func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
+        (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
+    )
+    if persona_id:
+        q = q.join(Home, HomeDailyTotal.home_id == Home.id).join(User, Home.user_id == User.id).where(User.persona_id == persona_id)
+    q = q.where(HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until).group_by(HomeDailyTotal.day_date).order_by(HomeDailyTotal.day_date.asc())
+    rows = (await db.execute(q)).all()
+    return {"entity_id": 0, "entity_name": name, "benchmark": True,
+            "data": [_cmp_point(r.day_date.isoformat(), r, metrics) for r in rows]}
 
 
 @router.post("/analytics/compare")
 async def compare_analytics(req: CompareRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    """Advanced Comparative Analytics endpoint."""
+    """Advanced comparative analytics: users or devices (any owner), with optional
+    community-average, persona-average and previous-period overlays."""
     _require_admin(request)
 
     since = date.fromisoformat(req.start_date)
     until = date.fromisoformat(req.end_date)
+    span = (until - since).days + 1
+    prev_since = since - timedelta(days=span)
+    prev_until = since - timedelta(days=1)
     datasets = []
 
     if req.entity_type == "user":
-        # Group metrics by user across all their homes
         for uid in req.entity_ids:
-            user_res = await db.execute(select(User).where(User.id == uid))
-            user = user_res.scalar_one_or_none()
+            user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
             if not user:
                 continue
-
-            q = (
-                select(
-                    HomeDailyTotal.day_date,
-                    func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
-                    func.sum(HomeDailyTotal.total_cost_gbp).label("cost_gbp"),
-                    func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
-                    (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
-                    func.avg(HomeDailyTotal.efficiency_score).label("efficiency_score"),
-                )
-                .join(Home, HomeDailyTotal.home_id == Home.id)
-                .where(
-                    Home.user_id == uid,
-                    HomeDailyTotal.day_date >= since,
-                    HomeDailyTotal.day_date <= until,
-                )
-                .group_by(HomeDailyTotal.day_date)
-                .order_by(HomeDailyTotal.day_date.asc())
-            )
-            result = await db.execute(q)
-            rows = result.all()
-
-            data_points = []
-            for r in rows:
-                dp = {"date": r.day_date.isoformat()}
-                if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
-                if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.cost_gbp or 0), 2)
-                if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
-                if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
-                if "efficiency_score" in req.metrics: dp["efficiency_score"] = round(float(r.efficiency_score or 0), 2)
-                data_points.append(dp)
-
-            datasets.append({
-                "entity_id": uid,
-                "entity_name": user.name,
-                "data": data_points
-            })
+            datasets.append({"entity_id": uid, "entity_name": user.name,
+                             "data": await _compare_user_points(db, uid, since, until, req.metrics)})
+            if req.period_over_period:
+                datasets.append({"entity_id": uid, "entity_name": f"{user.name} (prev period)", "previous": True,
+                                 "data": await _compare_user_points(db, uid, prev_since, prev_until, req.metrics, shift_days=span)})
 
     elif req.entity_type == "device":
         for did in req.entity_ids:
-            dev_res = await db.execute(
+            row = (await db.execute(
                 select(Device, Home).join(Home, Device.home_id == Home.id).where(Device.id == did)
-            )
-            row = dev_res.one_or_none()
+            )).one_or_none()
             if not row:
                 continue
             device, home = row
+            datasets.append({"entity_id": did, "target_user_id": home.user_id,
+                             "entity_name": f"{device.name} ({device.appliance_key})",
+                             "data": await _compare_device_points(db, did, since, until, req.metrics)})
+            if req.period_over_period:
+                datasets.append({"entity_id": did, "target_user_id": home.user_id,
+                                 "entity_name": f"{device.name} (prev period)", "previous": True,
+                                 "data": await _compare_device_points(db, did, prev_since, prev_until, req.metrics, shift_days=span)})
 
-            q = (
-                select(DailySummary)
-                .where(
-                    DailySummary.device_id == did,
-                    DailySummary.day_date >= since,
-                    DailySummary.day_date <= until,
-                )
-                .order_by(DailySummary.day_date.asc())
-            )
-            result = await db.execute(q)
-            rows = result.scalars().all()
-
-            data_points = []
-            for r in rows:
-                dp = {"date": r.day_date.isoformat()}
-                if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
-                if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.estimated_cost_gbp or 0), 2)
-                if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
-                if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
-                if "active_minutes" in req.metrics: dp["active_minutes"] = r.active_minutes or 0
-                if "efficiency_score" in req.metrics: dp["efficiency_score"] = round(float(r.efficiency_score or 0), 2)
-                data_points.append(dp)
-
-            datasets.append({
-                "entity_id": did,
-                "target_user_id": home.user_id,
-                "entity_name": f"{device.name} ({device.appliance_key})",
-                "data": data_points
-            })
-
-    # ── Compare mode: community average (per-home) benchmark overlay ──
     if req.include_community_avg:
-        comm_q = (
-            select(
-                HomeDailyTotal.day_date,
-                (func.sum(HomeDailyTotal.total_kwh)
-                 / func.count(func.distinct(HomeDailyTotal.home_id))).label("total_kwh"),
-                (func.sum(HomeDailyTotal.total_cost_gbp)
-                 / func.count(func.distinct(HomeDailyTotal.home_id))).label("cost_gbp"),
-                func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
-                (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
-            )
-            .where(HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until)
-            .group_by(HomeDailyTotal.day_date)
-            .order_by(HomeDailyTotal.day_date.asc())
-        )
-        comm_rows = (await db.execute(comm_q)).all()
-        comm_points = []
-        for r in comm_rows:
-            dp = {"date": r.day_date.isoformat()}
-            if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
-            if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.cost_gbp or 0), 2)
-            if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
-            if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
-            comm_points.append(dp)
-        datasets.append({
-            "entity_id": 0, "entity_name": "Community average",
-            "benchmark": True, "data": comm_points,
-        })
+        datasets.append(await _avg_series(db, since, until, req.metrics, "Community average"))
+
+    if req.include_persona_avg and req.entity_type == "user" and req.entity_ids:
+        first = (await db.execute(select(User).where(User.id == req.entity_ids[0]))).scalar_one_or_none()
+        if first and first.persona_id:
+            persona = (await db.execute(select(Persona).where(Persona.id == first.persona_id))).scalar_one_or_none()
+            datasets.append(await _avg_series(db, since, until, req.metrics,
+                                              f"{persona.name if persona else 'Persona'} avg",
+                                              persona_id=first.persona_id))
 
     return {"datasets": datasets}
 
