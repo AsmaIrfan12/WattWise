@@ -15,7 +15,7 @@ from app.models import (
     User, Home, Device, Notification, UserDecision,
     AdminNotificationTemplate, EnergyRanking, HomeDailyTotal,
     UserInteractionLog, Persona, AdminAuditLog, EnergyReading,
-    DailySummary, HourlySummary
+    DailySummary, HourlySummary, PersonaClusterAssignment
 )
 from app.schemas import (
     AdminNotificationSend, AdminTemplateCreate,
@@ -1185,6 +1185,54 @@ async def admin_device_report(
                    "avg_daily_kwh": round(total_kwh / max(len(series), 1), 3)},
         "daily": series,
         "hourly_profile": hourly_profile,
+    }
+
+
+# ── System / Pipeline Health ──────────────────────────────────
+
+@router.get("/system/pipeline-health")
+async def pipeline_health(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Data-pipeline freshness for the admin panel, derived from the DATABASE (so it is
+    consistent across all uvicorn workers — the in-memory scheduler metrics only live in
+    the single scheduler-owner worker). Surfaces where the pipeline last produced data so
+    "everything is 0" is diagnosable at a glance instead of silently empty.
+    """
+    _require_admin(request)
+    now = datetime.utcnow()
+
+    async def _max(col):
+        return (await db.execute(select(func.max(col)))).scalar()
+
+    last_reading = await _max(EnergyReading.recorded_at)
+    last_hourly = await _max(HourlySummary.hour_start)
+    last_daily = await _max(HomeDailyTotal.day_date)
+    last_ranking = await _max(EnergyRanking.period_start)
+    last_classify = await _max(PersonaClusterAssignment.run_at)
+
+    def age_min(ts):
+        if ts is None:
+            return None
+        if isinstance(ts, date) and not isinstance(ts, datetime):
+            ts = datetime.combine(ts, datetime.min.time())
+        return round((now - ts).total_seconds() / 60, 1)
+
+    def iso(ts):
+        return ts.isoformat() if ts is not None else None
+
+    def stage(ts, stale_after_min):
+        a = age_min(ts)
+        return {"at": iso(ts), "age_min": a, "stale": (a is None) or (a > stale_after_min)}
+
+    total_readings = (await db.execute(select(func.count(EnergyReading.id)))).scalar() or 0
+    return {
+        "now_utc": now.isoformat(),
+        "total_readings": int(total_readings),
+        "ingest":        stage(last_reading, 15),      # readings should arrive within 15 min
+        "hourly_agg":    stage(last_hourly, 90),       # 30-min job → allow 90 min slack
+        "daily_agg":     stage(last_daily, 60 * 26),   # daily job (00:15) → allow ~26 h
+        "rankings":      stage(last_ranking, 60 * 26),
+        "persona_run":   stage(last_classify, 60 * 8), # every 6 h → allow 8 h
     }
 
 

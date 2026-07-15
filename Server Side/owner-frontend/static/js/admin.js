@@ -288,6 +288,7 @@ function _energyPeriodQuery() {
 
 async function loadDashboard() {
   try {
+    loadPipelineHealth();
     const period = _energyPeriodQuery();
     const titleEl = document.getElementById('energy-chart-title');
     if (titleEl) titleEl.textContent = period.title;
@@ -1445,6 +1446,59 @@ async function loadBackups() {
         <a href="/api/backup/download/${encodeURIComponent(b.filename)}" class="btn-outline btn-sm">⬇ Download</a>
       </div>`).join('');
   } catch (err) { el.innerHTML = `<div class="loading-row">Error loading backups</div>`; }
+  populateExportUsers();
+}
+
+// ── Participant data export ───────────────────────────────────
+async function populateExportUsers() {
+  const sel = document.getElementById('export-user-select');
+  if (!sel) return;
+  try {
+    const users = await api('/api/admin/users?limit=1000');
+    sel.innerHTML = (users || []).map(u =>
+      `<option value="${u.id}">${DOMPurify.sanitize(u.name)} — ${DOMPurify.sanitize(u.email || '')}</option>`).join('');
+  } catch (err) { console.warn('export users:', err.message); }
+}
+
+async function exportSelectedUsers() {
+  const sel = document.getElementById('export-user-select');
+  const ids = Array.from(sel?.selectedOptions || []).map(o => parseInt(o.value));
+  if (!ids.length) { toast('Select at least one participant', 'error'); return; }
+  const days = parseInt(document.getElementById('export-days')?.value || '90');
+  try {
+    let data, fname;
+    if (ids.length === 1) {
+      data = await api(`/api/admin/export/user/${ids[0]}?days=${days}`);
+      fname = `wattwise-user-${ids[0]}.json`;
+    } else {
+      data = await api('/api/admin/export/users', { method: 'POST', body: JSON.stringify({ user_ids: ids, days }) });
+      fname = `wattwise-users-${ids.length}.json`;
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`Exported ${ids.length} participant(s)`, 'success');
+  } catch (err) { toast('Export failed: ' + err.message, 'error'); }
+}
+
+// ── Pipeline health strip (dashboard) ─────────────────────────
+async function loadPipelineHealth() {
+  const el = document.getElementById('pipeline-health');
+  if (!el) return;
+  try {
+    const h = await api('/api/admin/system/pipeline-health');
+    const fmtAge = m => m == null ? 'never' : (m < 60 ? `${Math.round(m)}m ago` : `${(m / 60).toFixed(1)}h ago`);
+    const stages = [
+      ['Ingest', h.ingest], ['Hourly agg', h.hourly_agg], ['Daily agg', h.daily_agg],
+      ['Rankings', h.rankings], ['Personas', h.persona_run],
+    ];
+    el.innerHTML = stages.map(([name, s]) =>
+      `<span title="${s.at || 'no data'}"><span style="color:${s.stale ? '#ef4444' : '#10b981'}">●</span> ${name}: ${fmtAge(s.age_min)}</span>`
+    ).join('') + `<span style="opacity:.7">· ${(h.total_readings || 0).toLocaleString()} readings</span>`;
+  } catch (err) { el.textContent = 'unavailable'; }
 }
 
 // ── Audit Log ─────────────────────────────────────────────────

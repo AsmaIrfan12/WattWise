@@ -2,17 +2,108 @@
 
 import csv
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import UserDecision, EnergyRanking, HomeDailyTotal, User, Home
+from app.models import UserDecision, EnergyRanking, HomeDailyTotal, User, Home, Device, Persona
 
 router = APIRouter(prefix="/api/admin/export", tags=["Admin Export"])
+
+
+def _json_safe(v):
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+def _row(obj) -> dict:
+    """Serialise any ORM row to a JSON-safe dict from its table columns (no hand-listing)."""
+    return {c.name: _json_safe(getattr(obj, c.name)) for c in obj.__table__.columns}
+
+
+async def _build_user_bundle(db: AsyncSession, user: User, days: int) -> dict:
+    """Full research bundle for one participant: profile, homes, devices, rankings,
+    decisions and daily totals over the last `days` days."""
+    since = date.today() - timedelta(days=days)
+    homes = (await db.execute(select(Home).where(Home.user_id == user.id))).scalars().all()
+    home_ids = [h.id for h in homes]
+    devices = []
+    daily = []
+    if home_ids:
+        devices = (await db.execute(select(Device).where(Device.home_id.in_(home_ids)))).scalars().all()
+        daily = (await db.execute(
+            select(HomeDailyTotal)
+            .where(HomeDailyTotal.home_id.in_(home_ids), HomeDailyTotal.day_date >= since)
+            .order_by(HomeDailyTotal.day_date.desc())
+        )).scalars().all()
+    persona = None
+    if user.persona_id:
+        persona = (await db.execute(select(Persona).where(Persona.id == user.persona_id))).scalar_one_or_none()
+    rankings = (await db.execute(
+        select(EnergyRanking).where(EnergyRanking.user_id == user.id, EnergyRanking.period_start >= since)
+        .order_by(EnergyRanking.period_start.desc())
+    )).scalars().all()
+    decisions = (await db.execute(
+        select(UserDecision).where(UserDecision.user_id == user.id)
+        .order_by(UserDecision.id.desc()).limit(2000)
+    )).scalars().all()
+
+    return {
+        "user": {**_row(user), "persona": persona.name if persona else None},
+        "homes": [_row(h) for h in homes],
+        "devices": [_row(d) for d in devices],
+        "rankings": [_row(r) for r in rankings],
+        "decisions": [_row(d) for d in decisions],
+        "home_daily_totals": [_row(t) for t in daily],
+        "counts": {
+            "homes": len(homes), "devices": len(devices),
+            "rankings": len(rankings), "decisions": len(decisions),
+            "daily_totals": len(daily),
+        },
+        "window_days": days,
+        "exported_at": datetime.utcnow().isoformat(),
+    }
+
+
+class UsersExportRequest(BaseModel):
+    user_ids: List[int]
+    days: int = 90
+
+
+@router.get("/user/{user_id}")
+async def export_user(
+    user_id: int, request: Request, db: AsyncSession = Depends(get_db),
+    days: int = Query(default=90, ge=1, le=365),
+):
+    """Full data bundle for a SINGLE participant (JSON)."""
+    _require_admin(request)
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return await _build_user_bundle(db, user, days)
+
+
+@router.post("/users")
+async def export_users(req: UsersExportRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Full data bundles for MULTIPLE participants (JSON) — up to 100 at a time."""
+    _require_admin(request)
+    bundles = []
+    for uid in req.user_ids[:100]:
+        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user:
+            bundles.append(await _build_user_bundle(db, user, req.days))
+    return {"count": len(bundles), "window_days": req.days,
+            "exported_at": datetime.utcnow().isoformat(), "users": bundles}
 
 
 def _require_admin(request: Request) -> int:

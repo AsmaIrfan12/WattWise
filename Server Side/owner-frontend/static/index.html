@@ -90,6 +90,12 @@
 
   <!-- ── SECTION: DASHBOARD ─────────────────────────────────── -->
   <section class="section active" id="section-dashboard">
+    <div class="card" id="pipeline-health-card" style="margin-bottom:1rem; padding:10px 16px">
+      <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap; font-size:.82rem; color:#94a3b8">
+        <strong style="color:#e5e7eb">🩺 Pipeline health</strong>
+        <span id="pipeline-health">Loading…</span>
+      </div>
+    </div>
     <!-- KPI Grid -->
     <div class="kpi-grid" id="kpi-grid">
       <div class="kpi-card" id="kpi-users">
@@ -680,6 +686,18 @@
       </div>
       <div id="backup-list" class="backup-list">
         <div class="loading-row">Loading backups…</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-header">
+        <h2 class="card-title">Participant Data Export</h2>
+        <button class="btn-primary btn-sm" onclick="exportSelectedUsers()">⬇ Export selected (JSON)</button>
+      </div>
+      <p class="card-desc">Full research bundle (profile, homes, devices, rankings, decisions, daily totals) for one or many participants. Select one for a single-person file, or Ctrl/Cmd-click several for a combined file.</p>
+      <div style="display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap">
+        <select id="export-user-select" multiple size="6" style="min-width:300px; height:auto; padding:6px"></select>
+        <label class="card-desc" style="margin:0">Window (days):
+          <input type="number" id="export-days" value="90" min="1" max="365" style="width:74px"></label>
       </div>
     </div>
     <div class="card" style="margin-top:1.5rem">
