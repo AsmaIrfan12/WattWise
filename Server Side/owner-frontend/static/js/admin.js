@@ -242,6 +242,30 @@ function createDonutChart(id, labels, data, colors) {
   });
 }
 
+function createRadarChart(id, labels, datasets, opts = {}) {
+  destroyChart(id);
+  const ctx = document.getElementById(id)?.getContext('2d');
+  if (!ctx) return;
+  _charts[id] = new Chart(ctx, {
+    type: 'radar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 12 }, padding: 12 } } },
+      scales: {
+        r: {
+          suggestedMin: 0, suggestedMax: 100,
+          angleLines: { color: 'rgba(255,255,255,0.08)' },
+          grid: { color: 'rgba(255,255,255,0.08)' },
+          pointLabels: { color: '#94a3b8', font: { size: 11 } },
+          ticks: { color: '#6b7280', backdropColor: 'transparent', stepSize: 25 },
+        },
+      },
+      ...opts,
+    },
+  });
+}
+
 // ── Dashboard ─────────────────────────────────────────────────
 function _energyPeriodQuery() {
   // Dropdown values are "h:N" (hours) or "d:N" (days). Returns {query, title}.
@@ -1036,23 +1060,37 @@ async function openPersonaMembers(personaId, personaName) {
   } catch (err) { toast('Member load failed: ' + err.message, 'error'); }
 }
 
+function _hexToRgba(hex, a) {
+  const h = (hex || '#6b7280').replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 async function loadPersonaComparisonChart() {
   const days = document.getElementById('persona-comparison-days')?.value || 30;
   try {
     const data = await api(`/api/admin/analytics/persona-comparison?days=${days}`);
     if (!data?.length) return;
 
-    const labels = data.map(r => r.persona);
-    createBarChart('chart-persona-compare', labels, [
-      { label: 'Efficiency Score', data: data.map(r => r.avg_efficiency_score), backgroundColor: 'rgba(59,130,246,0.7)' },
-      { label: 'Goal Adherence', data: data.map(r => r.avg_goal_adherence), backgroundColor: 'rgba(16,185,129,0.7)' },
-      { label: 'Decision Score', data: data.map(r => r.avg_decision_score), backgroundColor: 'rgba(139,92,246,0.7)' },
-    ], {
-      scales: {
-        x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-        y: { ticks: { color: '#6b7280', callback: v => `${v}%` }, grid: { color: 'rgba(255,255,255,0.04)' }, max: 100 },
-      },
+    // Radar of behavioural profiles — one shape per persona, so groups look distinct
+    // even when their user counts are similar (a flat grouped bar hid the differences).
+    const maxKwh = Math.max(...data.map(r => r.avg_daily_kwh || 0), 0.001);
+    const axes = ['Efficiency', 'Goal Adherence', 'Decision Response', 'Low Consumption'];
+    const datasets = data.map(r => {
+      const c = _personaColors[r.persona] || '#6b7280';
+      const lowConsumption = Math.max(0, Math.round(100 * (1 - (r.avg_daily_kwh || 0) / maxKwh)));
+      return {
+        label: `${r.persona} (${r.user_count})`,
+        data: [r.avg_efficiency_score, r.avg_goal_adherence, r.avg_decision_score, lowConsumption],
+        borderColor: c,
+        backgroundColor: _hexToRgba(c, 0.14),
+        borderWidth: 2,
+        pointBackgroundColor: c,
+        pointRadius: 3,
+      };
     });
+    createRadarChart('chart-persona-compare', axes, datasets);
   } catch (err) { console.warn('Persona comparison chart:', err.message); }
 }
 
@@ -1172,6 +1210,7 @@ async function initAdvancedComparison() {
     const metrics = Array.from(document.querySelectorAll('#compare-metric input:checked')).map(cb => cb.value);
     const start_date = document.getElementById('compare-start').value;
     const end_date = document.getElementById('compare-end').value;
+    const include_community_avg = document.getElementById('compare-community-avg')?.checked || false;
 
     if (!entity_ids.length || !metrics.length) {
       toast('Please select at least one target and one metric.', 'error');
@@ -1185,7 +1224,7 @@ async function initAdvancedComparison() {
     try {
       const res = await api('/api/admin/analytics/compare', {
         method: 'POST',
-        body: JSON.stringify({ entity_type, entity_ids, start_date, end_date, metrics })
+        body: JSON.stringify({ entity_type, entity_ids, start_date, end_date, metrics, include_community_avg })
       });
       _lastComparisonData = { datasets: res.datasets, metrics };
       renderComparisonChart(res.datasets, metrics);

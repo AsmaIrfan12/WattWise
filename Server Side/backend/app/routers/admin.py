@@ -973,6 +973,7 @@ class CompareRequest(BaseModel):
     start_date: str
     end_date: str
     metrics: List[str]  # e.g., ["total_kwh", "cost_gbp", "active_minutes", "peak_watts", "efficiency_score"]
+    include_community_avg: bool = False  # add a per-home community-average benchmark series
 
 
 @router.post("/analytics/compare")
@@ -1069,7 +1070,122 @@ async def compare_analytics(req: CompareRequest, request: Request, db: AsyncSess
                 "data": data_points
             })
 
+    # ── Compare mode: community average (per-home) benchmark overlay ──
+    if req.include_community_avg:
+        comm_q = (
+            select(
+                HomeDailyTotal.day_date,
+                (func.sum(HomeDailyTotal.total_kwh)
+                 / func.count(func.distinct(HomeDailyTotal.home_id))).label("total_kwh"),
+                (func.sum(HomeDailyTotal.total_cost_gbp)
+                 / func.count(func.distinct(HomeDailyTotal.home_id))).label("cost_gbp"),
+                func.max(HomeDailyTotal.peak_watts).label("peak_watts"),
+                (func.avg(HomeDailyTotal.total_kwh) * 1000 / 24).label("avg_watts"),
+            )
+            .where(HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until)
+            .group_by(HomeDailyTotal.day_date)
+            .order_by(HomeDailyTotal.day_date.asc())
+        )
+        comm_rows = (await db.execute(comm_q)).all()
+        comm_points = []
+        for r in comm_rows:
+            dp = {"date": r.day_date.isoformat()}
+            if "total_kwh" in req.metrics: dp["total_kwh"] = round(float(r.total_kwh or 0), 2)
+            if "cost_gbp" in req.metrics: dp["cost_gbp"] = round(float(r.cost_gbp or 0), 2)
+            if "peak_watts" in req.metrics: dp["peak_watts"] = round(float(r.peak_watts or 0), 2)
+            if "avg_watts" in req.metrics: dp["avg_watts"] = round(float(r.avg_watts or 0), 2)
+            comm_points.append(dp)
+        datasets.append({
+            "entity_id": 0, "entity_name": "Community average",
+            "benchmark": True, "data": comm_points,
+        })
+
     return {"datasets": datasets}
+
+
+@router.get("/analytics/device/{device_id}/report")
+async def admin_device_report(
+    device_id: int, request: Request, db: AsyncSession = Depends(get_db),
+    days: int = Query(default=14, ge=1, le=90),
+):
+    """
+    Full single-device analysis for ANY user's device (admin only).
+    Combines the daily series, window totals and an hour-of-day load profile so an
+    admin can inspect one device of any registered user without owning it.
+    """
+    _require_admin(request)
+    dev_res = await db.execute(
+        select(Device, Home, User)
+        .join(Home, Device.home_id == Home.id)
+        .join(User, Home.user_id == User.id)
+        .where(Device.id == device_id)
+    )
+    row = dev_res.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Device not found")
+    device, home, user = row
+    since = date.today() - timedelta(days=days)
+    start_dt = datetime.combine(since, datetime.min.time())
+
+    ds = await db.execute(
+        select(DailySummary)
+        .where(DailySummary.device_id == device_id, DailySummary.day_date >= since)
+        .order_by(DailySummary.day_date.asc())
+    )
+    daily = ds.scalars().all()
+    series = [{
+        "date": r.day_date.isoformat(),
+        "total_kwh": round(float(r.total_kwh or 0), 3),
+        "cost_gbp": round(float(r.estimated_cost_gbp or 0), 2),
+        "peak_watts": round(float(r.peak_watts or 0), 1),
+        "avg_watts": round(float(r.avg_watts or 0), 1),
+        "active_minutes": r.active_minutes or 0,
+    } for r in daily]
+
+    if not series:  # raw fallback so the report is never empty
+        rate = settings.ENERGY_STANDARD_PRICE_PER_KWH or 0.27
+        raw = await db.execute(
+            select(
+                func.date(EnergyReading.recorded_at).label("d"),
+                func.sum(EnergyReading.energy_kwh).label("kwh"),
+                func.avg(EnergyReading.power_watts).label("w"),
+                func.max(EnergyReading.power_watts).label("peak"),
+            )
+            .where(EnergyReading.device_id == device_id, EnergyReading.recorded_at >= start_dt)
+            .group_by(func.date(EnergyReading.recorded_at))
+            .order_by(func.date(EnergyReading.recorded_at).asc())
+        )
+        series = [{
+            "date": str(r.d), "total_kwh": round(float(r.kwh or 0), 3),
+            "cost_gbp": round(float(r.kwh or 0) * rate, 2),
+            "peak_watts": round(float(r.peak or 0), 1), "avg_watts": round(float(r.w or 0), 1),
+            "active_minutes": None,
+        } for r in raw.all()]
+
+    hp = await db.execute(
+        select(
+            func.hour(EnergyReading.recorded_at).label("h"),
+            func.avg(EnergyReading.power_watts).label("w"),
+        )
+        .where(EnergyReading.device_id == device_id, EnergyReading.recorded_at >= start_dt)
+        .group_by(func.hour(EnergyReading.recorded_at))
+        .order_by(func.hour(EnergyReading.recorded_at).asc())
+    )
+    hourly_profile = [{"hour": int(r.h), "avg_watts": round(float(r.w or 0), 1)} for r in hp.all()]
+
+    total_kwh = round(sum(p["total_kwh"] for p in series), 3)
+    total_cost = round(sum(p["cost_gbp"] for p in series), 2)
+    return {
+        "device": {"id": device.id, "name": device.name, "appliance_key": device.appliance_key,
+                   "entity_id": device.entity_id},
+        "home": {"id": home.id, "name": home.home_name},
+        "user": {"id": user.id, "name": user.name, "email": user.email},
+        "window_days": days,
+        "totals": {"total_kwh": total_kwh, "total_cost_gbp": total_cost,
+                   "avg_daily_kwh": round(total_kwh / max(len(series), 1), 3)},
+        "daily": series,
+        "hourly_profile": hourly_profile,
+    }
 
 
 # ── Device / RPi Monitoring ───────────────────────────────────
