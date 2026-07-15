@@ -14,7 +14,8 @@ from jose import jwt, JWTError
 from sqlalchemy import text
 
 from app.config import settings
-from app.database import init_db, AsyncSessionLocal
+from app.database import init_db, AsyncSessionLocal, engine
+from sqlalchemy import text
 from app.mqtt_client import start_mqtt, stop_mqtt, is_mqtt_connected
 from app.observability import metrics_store
 from app.scheduler import (
@@ -72,6 +73,11 @@ logger = logging.getLogger("main")
 # just before the 16:00 UK peak) and daily_report (07:00) must fire on the
 # user's clock, not the container's UTC — otherwise they drift 1h every BST.
 scheduler = AsyncIOScheduler(timezone="Europe/London")
+
+# Connection that holds the MySQL advisory lock electing this process as the SINGLE
+# scheduler owner (uvicorn runs 4 workers). Held for the process lifetime, released on
+# shutdown. Remains None in the non-owner workers.
+_scheduler_lock_conn = None
 
 
 def _security_warnings() -> list[str]:
@@ -221,34 +227,53 @@ async def lifespan(app: FastAPI):
         await seed_default_personas(db)
     logger.info("✅ Default personas seeded")
 
-    # Schedule recurring jobs
-    scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
-    scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
-    scheduler.add_job(_job_analytics_evaluator,"cron",       hour=0,    minute=30,         id="analytics_eval")
-    scheduler.add_job(_job_goal_check,         "interval",   hours=1,                     id="goal_check")
-    scheduler.add_job(_job_peak_reminder,      "cron",       hour=15,   minute=45,         id="peak_reminder")
-    scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
-    scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
-    scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
-    scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
-    scheduler.add_job(_job_classify_personas,  "interval",   hours=6,                     id="classify_personas")
-    scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
-    scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
-    scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
-    # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
-    scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
-    scheduler.start()
-    logger.info("✅ Scheduler started with 14 jobs (personas every 6 h; self-healing backfill)")
+    # Elect a SINGLE scheduler owner. uvicorn runs 4 workers; without this each worker
+    # runs the full scheduler, so every job (aggregation, anomaly scan, notifications)
+    # fires 4x concurrently — including duplicate user alerts. A MySQL advisory lock held
+    # for this process's lifetime picks one owner; the other 3 workers skip all jobs.
+    global _scheduler_lock_conn
+    _scheduler_lock_conn = await engine.connect()
+    owns_scheduler = bool(
+        (await _scheduler_lock_conn.execute(text("SELECT GET_LOCK('ww_scheduler', 0)"))).scalar()
+    )
+    if not owns_scheduler:
+        await _scheduler_lock_conn.close()
+        _scheduler_lock_conn = None
+        logger.info("ℹ️  Scheduler owned by another worker — this worker runs no scheduled jobs")
+    else:
+        scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
+        scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
+        scheduler.add_job(_job_analytics_evaluator,"cron",       hour=0,    minute=30,         id="analytics_eval")
+        scheduler.add_job(_job_goal_check,         "interval",   hours=1,                     id="goal_check")
+        scheduler.add_job(_job_peak_reminder,      "cron",       hour=15,   minute=45,         id="peak_reminder")
+        scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
+        scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
+        scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
+        scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
+        scheduler.add_job(_job_classify_personas,  "interval",   hours=6,                     id="classify_personas")
+        scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
+        scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
+        scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
+        # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
+        scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
+        scheduler.start()
+        logger.info("✅ This worker owns the scheduler — 14 jobs started (personas every 6 h; self-healing backfill)")
 
-    # One-time 8-day backfill shortly after boot so charts populate immediately.
-    # Run as a background task (not a scheduler 'date' job) to avoid timezone-vs-naive
-    # misfire between datetime.now() and the scheduler's Europe/London zone.
-    asyncio.create_task(_job_backfill_startup())
+        # One-time 8-day backfill shortly after boot so charts populate immediately.
+        # Run as a background task (not a scheduler 'date' job) to avoid a timezone-vs-naive
+        # misfire between datetime.now() and the scheduler's Europe/London zone.
+        asyncio.create_task(_job_backfill_startup())
 
     yield
 
     # Shutdown — wait=True ensures no job is left mid-execution (prevents data corruption)
-    scheduler.shutdown(wait=True)
+    if scheduler.running:
+        scheduler.shutdown(wait=True)
+    if _scheduler_lock_conn is not None:
+        try:
+            await _scheduler_lock_conn.execute(text("SELECT RELEASE_LOCK('ww_scheduler')"))
+        finally:
+            await _scheduler_lock_conn.close()
     stop_mqtt()
     logger.info("WattWise server shutdown complete")
 
