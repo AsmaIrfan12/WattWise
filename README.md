@@ -1,339 +1,260 @@
-# ⚡ WattWise — Smart Home Energy Monitoring
+# ⚡ WattWise — Community Smart-Home Energy Monitoring
 
-> **Developer:** Mr. Suhas Devmane · Cardiff University, Wales, UK  
-> **Research:** PhD — Community-Level Energy Decision-Making & Behaviour Change  
+> **Developer:** Mr. Suhas Devmane · Cardiff University, Wales, UK
+> **Research:** PhD — Community-Level Energy Decision-Making & Behaviour Change
 > **Version:** 4.0.0 (Community Release)
 
-A community-scale, cloud-hosted energy monitoring platform. Each household's Raspberry Pi + Tapo smart plugs publish telemetry to a central cloud backend. Users receive intelligent energy alerts, compete in community rankings, set consumption goals, and make data-driven decisions — supporting PhD research in energy behaviour change.
+Each household's Raspberry Pi + Tapo smart plugs publish energy telemetry to a central
+cloud backend. Users get intelligent alerts, community rankings, goals and data-driven
+decisions; researchers get behavioural personas and analytics.
+
+> 🔒 **SECURITY NOTICE.** This README and `wattwise_cardiff_participants_*.csv` contain
+> **real plaintext credentials** for a private research deployment. **Keep this
+> repository PRIVATE.** Rotate every secret before any public release, and prefer the
+> gitignored `*.secrets.local` files / `.env` (never committed) for production secrets.
 
 ---
 
-## 📘 Operations Docs
-
-- [WATTWISE_SETUP_GUIDE.md](WATTWISE_SETUP_GUIDE.md) — full setup and operations guide.
-- [QUICK_START.md](QUICK_START.md) — 5 to 10 minute bring-up and smoke checks.
-- [DEPLOY_CHECKLIST.md](DEPLOY_CHECKLIST.md) — pre-deploy and post-deploy validation.
-
----
-
-## 🏗️ Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system diagram, database strategy, and community migration plan.
+## 1. Architecture
 
 ```
-Tapo Plugs → Home Assistant (RPi) → InfluxDB (local)
-  → rpi_mqtt_publisher.py → Cloud MQTT (Mosquitto)
-    → FastAPI Backend (Docker) → MySQL + InfluxDB Cloud
-      → User Dashboard (Nginx :3001) ← Android App (WebView)
-      → Admin Dashboard (Nginx :3000)
-      → Expo Push Notifications → Android
+Tapo P110 plugs → Home Assistant (RPi) → local InfluxDB
+   → rpi_mqtt_publisher.py  → Cloud MQTT (Mosquitto, TCP 1883 / WS 9001)
+      → FastAPI backend (Docker) → MySQL (relational) + InfluxDB (time-series)
+         → nginx → User dashboard (:3001, "/") + Admin dashboard (:3000, "/admin/")
+         → Android app (WebView) · Expo push notifications
 ```
+Full detail: [ARCHITECTURE.md](ARCHITECTURE.md). Codebase guide: [CLAUDE.md](CLAUDE.md).
+
+| Layer | Tech | Location |
+|---|---|---|
+| Sensing | Python, paho-mqtt, InfluxDB | `Sensing Layer/` |
+| Backend | FastAPI, SQLAlchemy 2, aiomysql | `Server Side/backend/app/` |
+| Databases | MySQL 8 + InfluxDB 1.8 | Docker volumes |
+| MQTT | Mosquitto 2 (1883 TCP, 9001 WS) | `Server Side/mosquitto/` |
+| Proxy | nginx (HTTP) | `Server Side/nginx-proxy/` |
+| Admin UI | Node, `:3000` | `Server Side/owner-frontend/` |
+| User UI | Node, `:3001` | `Server Side/user-frontend/` |
+| Android | Kotlin, Compose, Hilt, WebView | `User Apps/Android/WattWiseUserApp/` |
 
 ---
 
-## 🚀 Quick Start (Development)
+## 2. Deploy to a DigitalOcean droplet (production)
+
+Full guide with every command: **[DEPLOY_DIGITALOCEAN.md](DEPLOY_DIGITALOCEAN.md)**. Summary:
+
+**Current droplet:** Reserved IP `159.65.213.183` (use this — it's stable). Recommended
+size **2 vCPU / 4 GB** (a 1 vCPU / 2 GB box works only *with swap* — see below).
 
 ```bash
-cd "Server Side"
+# On the droplet (Docker + Compose already installed):
+cd ~ && git clone https://github.com/AsmaIrfan12/WattWise.git wattwise && cd wattwise
 
-# 1. Copy and fill in environment
-cp .env.production.template .env
-# Edit .env with your credentials
+# Firewall
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp \
+  && sudo ufw allow 1883/tcp && sudo ufw --force enable
 
-# 2. Generate admin password hash
-python3 scripts/generate_admin_hash.py
-# Paste hash into mysql/init/01-schema.sql
+# Swap (REQUIRED on 2 GB — stops MySQL/InfluxDB being OOM-killed)
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile \
+  && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
-# 3. Set up MQTT passwords
-docker compose exec mosquitto bash /mosquitto/scripts/setup_mqtt_passwords.sh
+# Secrets — the .env files are gitignored, so copy them from a working machine (LAPTOP):
+#   scp .env             "root@159.65.213.183:~/wattwise/.env"
+#   scp "Server Side/.env" "root@159.65.213.183:~/wattwise/Server Side/.env"
 
-# 4. Start all services
-docker compose up --build
+docker compose up -d --build      # first boot ~2-3 min (schema + seed + bootstrap)
+docker compose ps                 # all Up/healthy
+curl -s http://localhost/health   # {"status":"healthy"}
 ```
 
-Services available:
+Then:
+- **Admin portal:** `http://159.65.213.183:3000`
+- **User dashboard / API:** `http://159.65.213.183`
+
+The stack is **IP-agnostic** (nginx `server_name _`, relative API paths) — only the
+**clients** (Android app + RPis) need the address; the server needs no domain to run.
+
+### Add a domain + HTTPS later
+Point a domain's A record at the droplet, issue a Let's Encrypt cert (nginx already has a
+`:443` block + certbot volumes), then switch the app to `https://your.domain` and RPis
+back to `wss` on 443.
+
+---
+
+## 3. Local development
+
+```bash
+# From the repo ROOT (compose lives here, not in "Server Side"):
+docker compose up -d --build
+docker compose ps
+```
+The **dummy data sender** auto-starts and posts synthetic readings for the 50 participant
+homes every **5 minutes**. It does **not** touch real RPi homes (e.g. Asma / home_001).
+
 | Service | URL |
-|---------|-----|
-| FastAPI backend | http://localhost:8000 |
-| API docs (Swagger) | http://localhost:8000/docs |
-| Admin Dashboard | http://localhost:3000 |
-| User Dashboard | http://localhost:3001 |
+|---|---|
+| User dashboard | http://localhost/ (or `:3001`) |
+| Admin dashboard | http://localhost:3000 |
+| API + Swagger | http://localhost:8000 · http://localhost:8000/docs |
+| Health | http://localhost/health → `{"status":"healthy"}` |
 
 ---
 
-## 📁 Repository Structure
+## 4. Credentials
 
-```
-WattWise/
-├── ARCHITECTURE.md         ← Full architecture & migration plan
-├── app.js                  ← Legacy Node.js API (Render.com)
-├── model/ routes/ services/ controllers/  ← Node.js modules
-├── Dockerfile.nodejs
-│
-├── Sensing Layer/          ← Raspberry Pi MQTT publisher
-│   ├── rpi_mqtt_publisher.py
-│   ├── rpi_publisher_config.yaml
-│   ├── wattwise-publisher.service  (systemd)
-│   └── install_publisher.sh
-│
-├── Server Side/            ← Cloud backend (Docker Compose)
-│   ├── docker-compose.yml
-│   ├── .env.production.template
-│   ├── backend/            ← FastAPI (Python 3.12)
-│   ├── mysql/init/         ← MySQL 8.0 schema (14 tables)
-│   ├── mosquitto/          ← MQTT broker + auth
-│   ├── nginx-proxy/        ← HTTPS reverse proxy (Let's Encrypt)
-│   ├── owner-frontend/     ← Admin dashboard (Nginx :3000)
-│   ├── user-frontend/      ← User dashboard (Nginx :3001)
-│   └── scripts/
-│       └── generate_admin_hash.py
-│
-├── User Apps/Android/      ← Android app (Kotlin + Compose)
-│   └── WattWiseUserApp/    ← com.wattwise.userapp v4.x
-│
-└── .github/workflows/
-    └── ci-cd.yml           ← GitHub Actions CI/CD pipeline
-```
+> 🔒 Real secrets — keep the repo private and rotate before any public release.
 
----
-
-## ⚠️ Before Going Live
-
-1. Replace `PLACEHOLDER_CHANGE_THIS_HASH` in `mysql/init/01-schema.sql`  
-   → Run `python3 Server Side/scripts/generate_admin_hash.py`
-2. Fill in all `REPLACE_*` values in `Server Side/.env`
-3. Set up MQTT passwords via `setup_mqtt_passwords.sh`
-4. Update `Constants.kt` → `DEFAULT_SERVER_URL = "https://app.wattwiser.org"`
-5. Configure GitHub secrets: `PROD_HOST`, `PROD_USER`, `PROD_SSH_KEY`
-
----
-
-## 📱 Android App
-
-- **Package:** `com.wattwise.userapp`
-- **Version:** 4.0.0 (Community Release)  
-- **Min SDK:** 26 (Android 8.0+)
-- **Architecture:** Jetpack Compose + Hilt DI + WebView + Expo Push
-
-The app displays the user dashboard as a WebView — no Play Store release needed for UI updates. Only infrastructure changes (new API routes, push notification format changes) require an app update.
-
----
-
-## 🧪 Local Testing — Endpoints & Credentials
-
-All 9 containers must be running (`docker compose up -d` from repo root). The dummy data sender posts live readings every 5 s so dashboards show charts immediately.
-
-### Test Credentials
-
-#### Admin account (full access to all admin routes)
+### Admin
 | Field | Value |
-|-------|-------|
+|---|---|
 | Email | `admin@wattwise.co.uk` |
 | Password | `WattWise_Admin_Sys_Production_2026!` |
 
-#### Participant accounts (15 seeded users, one per home)
+### 🏠 Asma Irfan — REAL RPi home (`home_001`)
+The one live sensing node. Her RPi runs Home Assistant + InfluxDB and publishes real Tapo
+data. Bundle: [`Sensing Layer/deployments/asma-irfan/`](Sensing%20Layer/deployments/asma-irfan/).
 
-| # | Name | Email | Password | Home |
-|---|------|-------|----------|------|
-| 1 | Aled Morgan | `aled.morgan.1@wattwise-cardiff.co.uk` | `CardiffWW2026!01` | home_001 |
-| 2 | Bethan Hughes | `bethan.hughes.2@wattwise-cardiff.co.uk` | `CardiffWW2026!02` | home_002 |
-| 3 | Carys Evans | `carys.evans.3@wattwise-cardiff.co.uk` | `CardiffWW2026!03` | home_003 |
-| 4 | Dylan Price | `dylan.price.4@wattwise-cardiff.co.uk` | `CardiffWW2026!04` | home_004 |
-| 5 | Elen Jones | `elen.jones.5@wattwise-cardiff.co.uk` | `CardiffWW2026!05` | home_005 |
-| 6 | Ffion Roberts | `ffion.roberts.6@wattwise-cardiff.co.uk` | `CardiffWW2026!06` | home_006 |
-| 7 | Gareth Thomas | `gareth.thomas.7@wattwise-cardiff.co.uk` | `CardiffWW2026!07` | home_007 |
-| 8 | Hannah Williams | `hannah.williams.8@wattwise-cardiff.co.uk` | `CardiffWW2026!08` | home_008 |
-| 9 | Iwan Davies | `iwan.davies.9@wattwise-cardiff.co.uk` | `CardiffWW2026!09` | home_009 |
-| 10 | Jasmine Patel | `jasmine.patel.10@wattwise-cardiff.co.uk` | `CardiffWW2026!10` | home_010 |
-| 11 | Kieran Lewis | `kieran.lewis.11@wattwise-cardiff.co.uk` | `CardiffWW2026!11` | home_011 |
-| 12 | Lowri Jenkins | `lowri.jenkins.12@wattwise-cardiff.co.uk` | `CardiffWW2026!12` | home_012 |
-| 13 | Megan Rees | `megan.rees.13@wattwise-cardiff.co.uk` | `CardiffWW2026!13` | home_013 |
-| 14 | Nia Griffiths | `nia.griffiths.14@wattwise-cardiff.co.uk` | `CardiffWW2026!14` | home_014 |
-| 15 | Owain Pritchard | `owain.pritchard.15@wattwise-cardiff.co.uk` | `CardiffWW2026!15` | home_015 |
+| Purpose | Field | Value |
+|---|---|---|
+| **App / web login** | Email | `IrfanA1@cardiff.ac.uk` |
+| | Password | `WattWise2024!` |
+| **Cloud MQTT** (broker) | Username | `home_001` |
+| | Password | `WW_Home001_RPi_2026!` |
+| | Broker (droplet) | `159.65.213.183:1883` · transport **tcp** · tls **false** |
+| | Broker (domain+TLS) | `<domain>:443` · transport websockets · path `/mqtt` · tls true |
+| **Local InfluxDB** (on her RPi) | Host | `localhost:8086`, db `homeassistant`, ssl false |
+| | Username | `homeassistant` |
+| | Password | `Nabira2012!`  *(from her HA `secrets.yaml: influxdb_password`)* |
 
----
+**Her 4 devices** — `entity_id` is the cloud-match string (keep exact); `power_entity_id`
+is the HA InfluxDB tag the publisher reads:
 
-### Get an API Token (PowerShell)
+| Appliance | entity_id (cloud) | power_entity_id (HA InfluxDB) |
+|---|---|---|
+| Airfryer | `sensor.airfryer_04d1f4` | `airfryer_current_consumption` |
+| Dishwasher | `sensor.dishwasher_aebe90` | `dishwasher_current_consumption` |
+| Microwave | `sensor.microwave_821ec2` | `microwave_current_consumption` |
+| Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_current_consumption` |
 
-#### Admin token
-```powershell
-$TOKEN = (curl -s -X POST http://localhost:8000/api/auth/login `
-  -H "Content-Type: application/json" `
-  -d '{"email":"admin@wattwise.co.uk","password":"WattWise_Admin_Sys_Production_2026!"}' `
-  | ConvertFrom-Json).access_token
+**RPi config for the droplet** — set the `mqtt:` block in her
+`rpi_publisher_config.yaml` (or the add-on's `/config/wattwise_publisher.yaml`) to:
+```yaml
+mqtt:
+  host: "159.65.213.183"
+  port: 1883
+  transport: "tcp"
+  ws_path: ""
+  username: "home_001"
+  password: "WW_Home001_RPi_2026!"
+  tls: false
 ```
+Home Assistant OS runtime = the **WattWise Publisher add-on**
+([`Sensing Layer/hass-addon/wattwise-publisher/`](Sensing%20Layer/hass-addon/wattwise-publisher/)).
 
-#### Participant token (use any seeded user from the table above)
-```powershell
-$USER_TOKEN = (curl -s -X POST http://localhost:8000/api/auth/login `
-  -H "Content-Type: application/json" `
-  -d '{"email":"aled.morgan.1@wattwise-cardiff.co.uk","password":"CardiffWW2026!01"}' `
-  | ConvertFrom-Json).access_token
-```
+### Synthetic participants (50 seeded homes)
+Full list + passwords: [`wattwise_cardiff_participants_20260403-105251.csv`](wattwise_cardiff_participants_20260403-105251.csv).
+Pattern: email `firstname.lastname.N@wattwise-cardiff.co.uk`, password `CardiffWW2026!NN`
+(e.g. `aled.morgan.1@wattwise-cardiff.co.uk` / `CardiffWW2026!01`). These are
+dummy-data-fed and have no RPi.
 
-Use the token in all subsequent requests:
-```powershell
-curl -s http://localhost:8000/api/auth/me -H "Authorization: Bearer $TOKEN"
-```
+### Per-home MQTT accounts (RPi provisioning)
+Each RPi may only publish to `wattwise/homes/home_NNN/#`. **`home_001` = Asma (real).**
+`home_002`–`home_015` are pre-provisioned for future real RPis; password pattern
+`WW_HomeNNN_RPi_2026!`. Full set lives in `.env` (`MQTT_HOME_0NN_PASS`).
 
----
-
-### Dashboards (open in browser — no token needed)
-
-| URL | What you see |
-|-----|-------------|
-| `http://localhost/` | User energy dashboard |
-| `http://localhost:3001/` | Same (direct, bypasses nginx) |
-| `http://localhost:3000/` | Admin dashboard |
-| `http://localhost:8000/docs` | Full Swagger UI — try every endpoint interactively |
-
----
-
-### Health Checks
-
-| URL | Expected response |
-|-----|------------------|
-| `http://localhost/health` | `{"status":"ok"}` |
-| `http://localhost:8000/health` | `{"status":"ok"}` |
-| `http://localhost:8000/health/dependencies` | `{"status":"ok","checks":{"database":true,"mqtt":true,"influxdb":true}}` |
-| `http://localhost:8000/health/slo` | `{"status":"ok","breaches":{"errors":false,"auth_failures":false}}` |
-| `http://localhost:8000/metrics` | JSON counters: requests, 2xx/4xx/5xx, readings ingested |
-
----
-
-### API Endpoints — Admin token required
-
-| Method + Endpoint | What it returns |
-|-------------------|----------------|
-| `GET /api/auth/me` | Your profile (`is_admin: true` for admin) |
-| `GET /api/admin/dashboard` | Totals: users, homes, devices, energy today, notifications sent |
-| `GET /api/admin/users` | Full user list with persona, home, and goal info |
-| `GET /api/admin/users/{user_id}/details` | Deep profile for one user |
-| `GET /api/admin/devices/status` | Online/offline/wattage for every device |
-| `GET /api/admin/mqtt/stats` | Mosquitto broker stats (connected clients, messages) |
-| `GET /api/admin/rankings` | Admin view of community rankings |
-| `POST /api/admin/rankings/recompute` | Force-recompute all rankings now |
-| `POST /api/admin/trigger-aggregations` | Run hourly + daily aggregation immediately |
-| `POST /api/admin/anomalies/scan` | Run anomaly detection scan now |
-| `POST /api/admin/personas/run-classifier` | Run k-means persona classifier |
-| `GET /api/admin/personas` | All personas and their descriptions |
-| `GET /api/admin/personas/history` | History of classifier runs |
-| `POST /api/admin/notifications/send` | Send a notification to one or all users |
-| `GET /api/admin/audit-log` | Admin action audit trail |
-| `GET /api/admin/analytics/energy` | Community energy analytics |
-| `GET /api/admin/analytics/decisions` | Decision acceptance/rejection analytics |
-| `GET /api/admin/analytics/anomalies` | Anomaly analytics |
-| `GET /api/admin/analytics/sankey` | Energy flow Sankey data |
-| `GET /api/admin/export/energy` | Export energy CSV |
-| `GET /api/admin/export/decisions` | Export decisions CSV |
-| `GET /api/admin/export/rankings` | Export rankings CSV |
-| `GET /api/admin/backup/list` | List available MySQL backups |
-
-### API Endpoints — Participant token required
-
-| Method + Endpoint | What it returns |
-|-------------------|----------------|
-| `GET /api/homes` | Participant's home info |
-| `GET /api/homes/{home_id}/devices` | Devices in their home |
-| `GET /api/readings/{device_id}/live` | Live wattage (last reading) |
-| `GET /api/readings/{device_id}/hourly` | Hourly usage history |
-| `GET /api/readings/{device_id}/daily` | Daily usage history |
-| `GET /api/readings/{device_id}/analysis` | Smart usage analysis |
-| `GET /api/notifications/` | User's notifications (unread first) |
-| `POST /api/notifications/{id}/read` | Mark notification as read |
-| `GET /api/goals/` | User's energy goals |
-| `POST /api/goals/` | Create a new goal |
-| `GET /api/goals/{goal_id}/progress` | Goal progress vs. actuals |
-| `GET /api/decisions/` | User's decision history |
-| `POST /api/decisions/` | Record a decision (accept/reject/defer) |
-| `GET /api/decisions/impact-report` | Energy saved vs. promised |
-| `GET /api/rankings/me` | User's rank and score |
-| `GET /api/influx/measurements` | InfluxDB measurement names |
-| `GET /api/influx/device/{entity_id}/current` | Current power draw from InfluxDB |
-
-### Public Endpoints (no token)
-
-| Method + Endpoint | What it returns |
-|-------------------|----------------|
-| `GET /api/rankings/leaderboard` | Community leaderboard (anonymised) |
-| `POST /api/auth/login` | Exchange email + password for JWT |
-| `POST /api/auth/signup` | Register a new user |
-| `POST /api/auth/forgot-password` | Request password reset email |
-| `POST /api/auth/reset-password` | Complete password reset with token |
-
----
-
-### Direct DB & Broker Access (GUI tools / CLI)
-
-| Service | Host:Port | User | Password | DB/Bucket |
-|---------|-----------|------|----------|-----------|
+### Direct DB / broker access (dev, bound to 127.0.0.1)
+| Service | Host:Port | User | Password | DB |
+|---|---|---|---|---|
 | MySQL | `127.0.0.1:3307` | `wattwise_app` | `WattWise_App_Db_2026!` | `wattwise_db` |
-| InfluxDB | `http://127.0.0.1:8086` | `wattwise_influx` | `WattWise_Influx_2026!` | `wattwise_energy` |
+| InfluxDB (cloud) | `127.0.0.1:8086` | `wattwise_influx` | `WattWise_Influx_2026!` | `wattwise_energy` |
 | MQTT TCP | `localhost:1883` | `wattwise_backend` | `WattWise_MQTT_Backend_2026!` | — |
-| MQTT WebSocket | `ws://localhost:9001/mqtt` | same | same | — |
-
-Recommended GUI tools: **TablePlus** or **DBeaver** for MySQL, **InfluxDB UI** at `http://127.0.0.1:8086` for time-series, **MQTT Explorer** for broker inspection.
 
 ---
 
-### MQTT Per-Home Credentials (for RPi publisher testing)
+## 5. Android app
 
-Each RPi uses its home's dedicated MQTT account — it can only publish to its own topic (`wattwise/homes/home_NNN/#`).
+- Package `com.wattwise.userapp` · v4.0.0 · min SDK 26 · Compose + Hilt + WebView.
+- **Default server is the droplet** (`http://159.65.213.183`, port 80, HTTP) — a fresh
+  install connects with no setup. Users can change it in Settings.
+- Build an installable APK:
+  ```bash
+  cd "User Apps/Android/WattWiseUserApp"
+  ./gradlew assembleRelease   # -> app/build/outputs/apk/release/app-release.apk
+  ```
+  (Release falls back to the debug signing key when there's no `keystore.properties`, so
+  the APK is installable for sideloading.)
+- To move to a domain later: edit `util/Constants.kt` (`DEFAULT_SERVER_URL`, `DEFAULT_PORT`)
+  and add the host to `res/xml/network_security_config.xml`, then rebuild.
 
-| Home | MQTT Username | MQTT Password |
-|------|--------------|---------------|
-| 1 | `home_001` | `WW_Home001_RPi_2026!` |
-| 2 | `home_002` | `WW_Home002_RPi_2026!` |
-| 3 | `home_003` | `WW_Home003_RPi_2026!` |
-| 4 | `home_004` | `WW_Home004_RPi_2026!` |
-| 5 | `home_005` | `WW_Home005_RPi_2026!` |
-| 6 | `home_006` | `WW_Home006_RPi_2026!` |
-| 7 | `home_007` | `WW_Home007_RPi_2026!` |
-| 8 | `home_008` | `WW_Home008_RPi_2026!` |
-| 9 | `home_009` | `WW_Home009_RPi_2026!` |
-| 10 | `home_010` | `WW_Home010_RPi_2026!` |
-| 11 | `home_011` | `WW_Home011_RPi_2026!` |
-| 12 | `home_012` | `WW_Home012_RPi_2026!` |
-| 13 | `home_013` | `WW_Home013_RPi_2026!` |
-| 14 | `home_014` | `WW_Home014_RPi_2026!` |
-| 15 | `home_015` | `WW_Home015_RPi_2026!` |
+---
 
-Test a home credential manually:
+## 6. RPi publisher (real homes)
+
+Bundle: [`Sensing Layer/deployments/asma-irfan/`](Sensing%20Layer/deployments/asma-irfan/)
+(copy per home). Deploy guide: that folder's `README.md`. On Home Assistant OS use the
+**add-on** (no host `systemctl`); on Raspberry Pi OS use `install_publisher.sh` (systemd).
+New home = copy the bundle, set `home.id` / MQTT creds / device `entity_id`s / InfluxDB
+creds. Device entity_ids come from the admin DB; InfluxDB tags from `SHOW TAG VALUES FROM
+"W" WITH KEY = "entity_id"` in the RPi's InfluxDB add-on.
+
+---
+
+## 7. Operations & troubleshooting
+
 ```bash
-mosquitto_pub -h localhost -p 1883 \
-  -u home_001 -P "WW_Home001_RPi_2026!" \
-  -t "wattwise/homes/home_001/devices/kettle/data" \
-  -m '{"power_w":1850,"energy_kwh":0.05}'
+docker compose logs -f backend                 # tail a service
+docker compose run --rm bootstrap-aggregator   # rebuild summaries + rankings + personas
+docker compose restart backend                 # restart one service
+docker compose pull && docker compose up -d --build   # update after git pull
+```
+
+**On a fresh deploy, expect a warm-up period** — the aggregation/ranking jobs and the
+persona classifier need data first:
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| Energy total `0 kWh` / `£0.00`, "home always 0" | summaries empty until the 30-min hourly-agg job runs | wait ~30–60 min after data flows |
+| "Persona = None / only Disengaged", empty compare | classifier needs ≥2 days of daily rankings + ≥12 engaged homes | let data run ~2 days, then **⚙ Run Classifier** (admin) or `bootstrap-aggregator` |
+| Home not in rankings | rankings built by the daily job (01:30) | next day |
+| "Service temporarily unavailable" / "analytics failed" | backend/MySQL OOM on a 2 GB droplet | ensure **4 GB swap**; resize to 2 vCPU / 4 GB |
+| Devices "on" but shown offline | online = reported in last 15 min | confirm the RPi/dummy is publishing |
+| Asma's home 0 / offline | her RPi isn't publishing to the droplet | set her `mqtt` to `159.65.213.183:1883` tcp (§4) |
+| `MQTT connect failed (rc=5)` | wrong MQTT user/pass, or `home.id` ≠ MQTT username | check §4 |
+| RPi "0 published" but MQTT + ping OK | InfluxDB add-on auth missing | set `influxdb.username/password` (§4) |
+
+Personas auto-classify on every `docker compose up` (bootstrap), weekly (Sun 02:00), and
+via the admin **⚙ Run Classifier** button.
+
+---
+
+## 8. Key API endpoints
+
+Swagger (`/docs`) is the live reference. Highlights:
+
+**Public:** `POST /api/auth/login`, `POST /api/auth/signup`, `GET /api/rankings/leaderboard`, `GET /health`.
+**Participant (JWT):** `GET /api/homes`, `GET /api/readings/{device_id}/live|hourly|daily|standby`, `GET /api/rankings/me`, `GET /api/goals/`, `GET /api/decisions/`.
+**Admin (JWT):** `GET /api/admin/dashboard|users|devices/status`, `POST /api/admin/personas/run-classifier`, `POST /api/admin/anomalies/scan`, `GET /api/admin/analytics/*`, `GET /api/admin/export/*`.
+
+### Smoke test (bash)
+```bash
+curl -s http://localhost/health
+T=$(curl -s -X POST http://localhost:8000/api/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"admin@wattwise.co.uk","password":"WattWise_Admin_Sys_Production_2026!"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+curl -s http://localhost:8000/api/admin/dashboard -H "Authorization: Bearer $T"
+curl -s "http://localhost:8000/api/rankings/leaderboard?limit=5"
 ```
 
 ---
 
-### Quick Smoke-Test Sequence (PowerShell)
-
-```powershell
-# 1. Health
-curl -s http://localhost:8000/health/dependencies | ConvertFrom-Json
-
-# 2. Get admin token
-$T = (curl -s -X POST http://localhost:8000/api/auth/login `
-  -H "Content-Type: application/json" `
-  -d '{"email":"admin@wattwise.co.uk","password":"WattWise_Admin_Sys_Production_2026!"}' `
-  | ConvertFrom-Json).access_token
-
-# 3. Confirm admin identity
-curl -s http://localhost:8000/api/auth/me -H "Authorization: Bearer $T" | ConvertFrom-Json
-
-# 4. Admin dashboard summary
-curl -s http://localhost:8000/api/admin/dashboard -H "Authorization: Bearer $T" | ConvertFrom-Json
-
-# 5. Force aggregation so charts populate
-curl -s -X POST http://localhost:8000/api/admin/trigger-aggregations -H "Authorization: Bearer $T"
-
-# 6. Community leaderboard (public)
-curl -s "http://localhost:8000/api/rankings/leaderboard?limit=5" | ConvertFrom-Json
-
-# 7. Open dashboards in browser
-Start-Process "http://localhost:3000"   # Admin
-Start-Process "http://localhost:3001"   # User
-Start-Process "http://localhost:8000/docs"  # Swagger
+## 9. Repository layout
+```
+WattWise/
+├── docker-compose.yml            ← full stack (run from repo root)
+├── .env / .env.example           ← compose secrets (.env gitignored)
+├── DEPLOY_DIGITALOCEAN.md        ← droplet deploy guide
+├── Sensing Layer/                ← RPi publisher + per-home bundles + HA add-on
+├── Server Side/                  ← backend, frontends, mysql, mosquitto, nginx
+│   └── .env                      ← backend secrets (gitignored)
+└── User Apps/Android/            ← Kotlin app (com.wattwise.userapp)
 ```
