@@ -1332,7 +1332,7 @@ async function loadDevices() {
     const online = devices.filter(d => d.online).length;
     document.getElementById('device-status-summary').innerHTML = `
       <div class="device-stat"><strong>${devices.length}</strong> total devices</div>
-      <div class="device-stat" style="color:var(--success)"><strong>${online}</strong> online (last 5 min)</div>
+      <div class="device-stat" style="color:var(--success)"><strong>${online}</strong> online (last 15 min)</div>
       <div class="device-stat" style="color:var(--danger)"><strong>${devices.length - online}</strong> offline</div>`;
 
     tbody.innerHTML = devices.map(d => `

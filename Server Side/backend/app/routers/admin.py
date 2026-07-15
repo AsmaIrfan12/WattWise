@@ -1008,7 +1008,10 @@ async def get_device_status(request: Request, db: AsyncSession = Depends(get_db)
         online = False
         if last_seen:
             age_minutes = (datetime.utcnow() - last_seen).total_seconds() / 60
-            online = age_minutes <= 5
+            # A device is "online" if it reported within 15 min. The dummy sender
+            # publishes every 5 min and real RPis every 30 s, so a 5-min window made
+            # dummy homes flicker offline between sends; 15 min gives sane margin.
+            online = age_minutes <= 15
         output.append({
             "device_id": device.id, "device_name": device.name,
             "appliance_key": device.appliance_key, "entity_id": device.entity_id,
