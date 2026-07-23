@@ -303,6 +303,8 @@ app.add_middleware(
 PUBLIC_PATHS = {
     "/", "/health", "/health/dependencies", "/health/slo", "/metrics", "/docs", "/openapi.json", "/redoc",
     "/api/auth/signup", "/api/auth/login", "/api/auth/forgot-password", "/api/auth/reset-password",
+    # Community leaderboard is anonymised and public (documented, used on the landing view).
+    "/api/rankings/leaderboard",
     # RPi/Home-Assistant verified-action webhook — authenticated by the
     # X-WattWise-RPi-Key shared secret inside the endpoint, not by JWT.
     "/api/decisions/observed-action",
