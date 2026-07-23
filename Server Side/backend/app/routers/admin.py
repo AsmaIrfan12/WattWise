@@ -1235,25 +1235,38 @@ async def get_device_status(request: Request, db: AsyncSession = Depends(get_db)
         .order_by(Home.home_name.asc(), Device.name.asc())
     )
     devices = devices_result.all()
+    device_ids = [d.id for d, _h, _u in devices]
 
+    # Latest reading per device in ONE query (was an N+1: one query per device, which
+    # timed out with ~160 devices). Uses the (device_id, recorded_at) index via a
+    # max-per-device subquery joined back to the row.
+    last_by_device: dict[int, tuple] = {}
+    if device_ids:
+        mx = (
+            select(
+                EnergyReading.device_id.label("device_id"),
+                func.max(EnergyReading.recorded_at).label("mx"),
+            )
+            .where(EnergyReading.device_id.in_(device_ids))
+            .group_by(EnergyReading.device_id)
+            .subquery()
+        )
+        latest = await db.execute(
+            select(EnergyReading.device_id, EnergyReading.recorded_at, EnergyReading.power_watts)
+            .join(mx, (EnergyReading.device_id == mx.c.device_id)
+                     & (EnergyReading.recorded_at == mx.c.mx))
+        )
+        for r in latest.all():
+            last_by_device[r.device_id] = (r.recorded_at, r.power_watts)
+
+    now = datetime.utcnow()
     output = []
     for device, home, user in devices:
-        last_reading_result = await db.execute(
-            select(EnergyReading.recorded_at, EnergyReading.power_watts)
-            .where(EnergyReading.device_id == device.id)
-            .order_by(EnergyReading.recorded_at.desc())
-            .limit(1)
-        )
-        last = last_reading_result.one_or_none()
-        last_seen = last.recorded_at if last else None
-        last_power = last.power_watts if last else None
-        online = False
-        if last_seen:
-            age_minutes = (datetime.utcnow() - last_seen).total_seconds() / 60
-            # A device is "online" if it reported within 15 min. The dummy sender
-            # publishes every 5 min and real RPis every 30 s, so a 5-min window made
-            # dummy homes flicker offline between sends; 15 min gives sane margin.
-            online = age_minutes <= 15
+        rec = last_by_device.get(device.id)
+        last_seen = rec[0] if rec else None
+        last_power = rec[1] if rec else None
+        # Online if it reported within 15 min (dummy every 5 min, RPis every 30 s).
+        online = bool(last_seen and (now - last_seen).total_seconds() / 60 <= 15)
         output.append({
             "device_id": device.id, "device_name": device.name,
             "appliance_key": device.appliance_key, "entity_id": device.entity_id,

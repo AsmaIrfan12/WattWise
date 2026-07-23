@@ -5,9 +5,11 @@ One-shot startup job that ensures the dashboard is populated with all
 available history on every `docker compose up`.
 
 Steps (idempotent):
-1. aggregate_all_history — hourly + daily summaries + home_daily_totals
-   over the full range of recorded energy_readings
-2. compute_rankings — fills energy_rankings for the most recent day
+1. backfill_recent — hourly + daily summaries + home_daily_totals for a bounded
+   RECENT window (not the full history: aggregate_all_history is O(all hours) and
+   hangs once a deployment accumulates months of readings, which then blocks the
+   rankings + classify steps below). The scheduled 30-min job keeps it current after.
+2. compute_rankings_for_range — fills energy_rankings for the aggregated range
 3. classify_all_users — assigns each user to a persona based on history
 
 Designed to run as a one-shot container after the backend is healthy and
@@ -16,11 +18,16 @@ the db-seed job has completed.
 
 import asyncio
 import logging
+import os
 import sys
 
-from app.scheduler import aggregate_all_history, compute_rankings_for_range
+from app.scheduler import backfill_recent, compute_rankings_for_range
 from app.persona_classifier import classify_all_users, seed_default_personas
 from app.database import AsyncSessionLocal
+
+# Bounded backfill window (days). Big enough for the 30-day persona/ranking windows
+# with margin, small enough to finish quickly. Override via BOOTSTRAP_BACKFILL_DAYS.
+BACKFILL_DAYS = int(os.getenv("BOOTSTRAP_BACKFILL_DAYS", "35"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,10 +42,10 @@ async def main() -> int:
     log.info("=" * 60)
 
     try:
-        summary = await aggregate_all_history()
-        log.info("Aggregation summary: %s", summary)
+        summary = await backfill_recent(hours=BACKFILL_DAYS * 24)
+        log.info("Recent aggregation summary (%d days): %s", BACKFILL_DAYS, summary)
     except Exception:
-        log.exception("aggregate_all_history failed")
+        log.exception("backfill_recent failed")
         return 1
 
     try:
