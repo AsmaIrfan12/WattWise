@@ -217,6 +217,10 @@ services:
       dockerfile: Dockerfile
     container_name: wattwise-db-seed
     restart: "no"
+    # One-shot script — disable the healthcheck inherited from the backend image
+    # (it curls :8000, which this container doesn't serve → misleading "unhealthy").
+    healthcheck:
+      disable: true
     env_file:
       - ./Server Side/.env
     working_dir: /app
@@ -236,6 +240,9 @@ services:
       dockerfile: Dockerfile
     container_name: wattwise-bootstrap-aggregator
     restart: "no"
+    # One-shot script — disable the inherited backend healthcheck (see db-seed).
+    healthcheck:
+      disable: true
     env_file:
       - ./Server Side/.env
     working_dir: /app
