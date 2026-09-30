@@ -15,7 +15,7 @@ Supervisor add-on).
 - The four fixed values for that participant (see §"Per-home values"):
   `home_id`, MQTT `host/port/user/pass`, InfluxDB `host/db/user/pass`, and the device
   `entity_id` ↔ `power_entity_id` mappings.
-- The WattWise cloud reachable at **`159.65.213.183:1883`** (droplet, plain MQTT/TCP).
+- The WattWise cloud reachable at **`206.189.23.174:1883`** (droplet, plain MQTT/TCP).
 
 ---
 
@@ -70,7 +70,7 @@ influxdb:
   password: "<influxdb_password_from_secrets.yaml>"
   ssl: false
 mqtt:
-  host: "159.65.213.183"                # WattWise droplet
+  host: "206.189.23.174"                # WattWise droplet
   port: 1883
   transport: "tcp"
   ws_path: ""
@@ -102,13 +102,13 @@ and confirm this sequence, repeating every 30 s with `0 errors`:
 ```
 ✅ Config loaded ... (home_id=..., mqtt_user=...)
 📊 InfluxDB reader initialised: localhost:8086/homeassistant
-✅ MQTT connected to 159.65.213.183:1883
+✅ MQTT connected to 206.189.23.174:1883
 InfluxDB ping: ✅ OK
 🔄 Loop #1: 4 published, 0 errors
 ```
 
 ## 8. Cloud-side confirmation
-Open `http://159.65.213.183:3000`, log in with the **admin portal** credentials (separate from
+Open `http://206.189.23.174:3000`, log in with the **admin portal** credentials (separate from
 the MQTT/InfluxDB creds — see `Server Side/.env`: `ADMIN_EMAIL` / `ADMIN_PASSWORD`), and confirm
 the home shows **online** with live wattage within ~2 minutes.
 
@@ -123,7 +123,7 @@ the home shows **online** with live wattage within ~2 minutes.
 | device `entity_id` (cloud) | admin DB / the participant's registered devices | `sensor.airfryer_04d1f4`, `sensor.dishwasher_aebe90`, `sensor.microwave_821ec2`, `sensor.washing_machine_b612c5` |
 | device `power_entity_id` (InfluxDB tag) | §6 `SHOW TAG VALUES` on that Pi | `airfryer_current_consumption`, `dishwasher_current_consumption`, `microwave_current_consumption`, `washing_machine_current_consumption` |
 
-Keep `appliance_key` values as the standard set; `mqtt.host` (`159.65.213.183`) and the
+Keep `appliance_key` values as the standard set; `mqtt.host` (`206.189.23.174`) and the
 `influxdb` host/db/username (`localhost` / `homeassistant` / `homeassistant`) are the same for
 every home. A ready-to-edit template with Asma's device mappings is in this folder's
 `rpi_publisher_config.yaml` and the add-on's `publisher.default.yaml`.

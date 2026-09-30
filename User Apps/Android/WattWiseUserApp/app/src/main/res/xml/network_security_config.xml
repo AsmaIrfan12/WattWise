@@ -3,7 +3,7 @@
     <!-- Allow cleartext (HTTP) for the DigitalOcean droplet (bare IP, no TLS yet)
          and local development servers. -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">159.65.213.183</domain>  <!-- droplet Reserved IP -->
+        <domain includeSubdomains="false">206.189.23.174</domain>  <!-- droplet Reserved IP -->
         <domain includeSubdomains="false">144.126.193.109</domain> <!-- droplet public IP -->
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">localhost</domain>
