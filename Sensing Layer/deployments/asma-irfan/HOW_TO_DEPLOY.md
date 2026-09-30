@@ -1,21 +1,125 @@
-# How to Deploy the WattWise Publisher to a Home Assistant RPi
+# How to Deploy WattWise — Cloud (Docker droplet) + Home Assistant RPi Publisher
 
-**Proven runbook** — this is the exact procedure used to get Asma Irfan's RPi (`home_001`)
-publishing live data to the WattWise cloud. Follow it to onboard any new participant's
-Raspberry Pi. Works on **Home Assistant OS** (no host `systemctl`; the publisher runs as a
-Supervisor add-on).
+**Runbook** — Part B is the exact, proven procedure used to get Asma Irfan's RPi (`home_001`)
+publishing live data to the WattWise cloud; follow it to onboard any new participant's
+Raspberry Pi. It works on **Home Assistant OS** (no host `systemctl`; the publisher runs as a
+Supervisor add-on). Part A brings up the cloud it publishes to.
 
 > 🔒 Real passwords are **not** in this file. Fill each `<placeholder>` from the sources in
 > §"Per-home values". Asma's actual values live in the gitignored `asma-home.secrets.local`.
 
+This document has two parts — do them in order on a brand-new setup:
+
+- **Part A — Cloud:** bring up the whole WattWise stack with Docker on a fresh droplet.
+- **Part B — RPi:** point a participant's Home Assistant Pi at that cloud.
+
 ---
+
+# Part A — Deploy the WattWise cloud on a fresh droplet (Docker)
+
+Target: a fresh **Ubuntu 24.04 (LTS) x64** DigitalOcean droplet with the **Reserved IP
+`129.212.160.129`** assigned to it (DigitalOcean panel → Networking → Reserved IPs). Use the
+Reserved IP everywhere — it survives droplet rebuilds, the plain public IPv4 does not.
+Recommended size **2 vCPU / 4 GB**; a 1 vCPU / 2 GB box works only with the swap from A1.
+
+> A new droplet starts empty. MySQL / InfluxDB data from a destroyed droplet is gone unless
+> you restore a backup; the 50 synthetic participants and the admin account are re-seeded
+> automatically on first boot.
+
+## A1. On the droplet — install Docker and prepare the box
+```bash
+ssh root@129.212.160.129
+
+# Docker Engine + Compose plugin
+apt update && apt -y upgrade
+curl -fsSL https://get.docker.com | sh
+docker --version && docker compose version
+
+# Swap (REQUIRED on a 2 GB droplet, harmless on 4 GB — stops MySQL/InfluxDB being OOM-killed)
+fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile \
+  && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+# Firewall: SSH, user dashboard/API (80), admin portal (3000), MQTT for RPis (1883)
+ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 3000/tcp \
+  && ufw allow 1883/tcp && ufw --force enable
+
+# Code
+git clone https://github.com/AsmaIrfan12/WattWise.git /opt/wattwise
+```
+`/opt/wattwise` is the path the CI deploy job expects (see A6).
+
+## A2. On your laptop — copy the two secret files
+Both `.env` files are gitignored, so they never arrive with `git clone`. From the repo root
+on the laptop (PowerShell):
+```powershell
+scp .env "root@129.212.160.129:/opt/wattwise/.env"
+scp "Server Side/.env" "root@129.212.160.129:/opt/wattwise/Server Side/.env"
+```
+No laptop copy? Create them from `.env.example` and `Server Side/.env.production.template`.
+The stack is IP-agnostic — nothing in either file needs the droplet's address.
+
+## A3. On the droplet — start the stack
+```bash
+cd /opt/wattwise
+docker compose up -d --build      # first boot ~2-3 min (schema + seed + bootstrap)
+docker compose ps                 # long-running services Up / healthy
+curl -s http://localhost/health   # {"status":"healthy"}
+```
+`mosquitto-init`, `db-seed` and `bootstrap-aggregator` are one-shot jobs — showing as
+**Exited (0)** is correct. Everything else restarts automatically after a reboot.
+
+## A4. Check it from outside
+| What | Address |
+|---|---|
+| User dashboard / API | `http://129.212.160.129` |
+| Admin portal | `http://129.212.160.129:3000` (login: `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `Server Side/.env`) |
+| MQTT for RPis | `129.212.160.129:1883` · transport tcp · tls false |
+
+From any other machine: `nc -vz 129.212.160.129 1883` should connect.
+
+Expect a warm-up: energy totals stay `0 kWh` for ~30–60 min until the hourly aggregation
+runs; rankings fill the next day; personas need ~2 days of data.
+
+## A5. Day-to-day commands (run in `/opt/wattwise`)
+```bash
+docker compose logs -f backend                   # tail one service
+docker compose logs -f                           # tail everything
+docker compose restart backend                   # restart one service
+git pull && docker compose up -d --build         # update to the latest main
+docker compose run --rm bootstrap-aggregator     # rebuild summaries + rankings + personas
+docker compose down                              # stop (data volumes are kept)
+```
+
+## A6. After the cloud is up
+- **RPis:** every Pi must publish to `129.212.160.129:1883` — new Pi → Part B; existing Pi →
+  change `mqtt.host` in `/config/wattwise_publisher.yaml` and restart the add-on.
+- **Android app:** the default server URL is compiled in (`util/Constants.kt`). Rebuild and
+  reinstall the APK (`./gradlew assembleDebug` in `User Apps/Android/WattWiseUserApp`), or
+  change the server address in the app's Settings on existing installs.
+- **CI auto-deploy (optional):** for pushes to `main` to deploy here, set the GitHub secret
+  `PROD_HOST` to `129.212.160.129` and add the `PROD_SSH_KEY` public key to the droplet's
+  `~/.ssh/authorized_keys`.
+
+## A7. Cloud troubleshooting
+| Symptom | Fix |
+|---|---|
+| `docker compose up` fails with `env file ... not found` | the `.env` files weren't copied — redo A2 |
+| backend stuck `unhealthy` / restarting | `docker compose logs backend`; usually MySQL still initialising on first boot — wait 2 min |
+| "Service temporarily unavailable", containers killed | out of memory — confirm swap with `free -h` (A1) or resize the droplet |
+| Dashboard unreachable from outside, `curl localhost/health` OK | firewall — `ufw status`, plus any DigitalOcean Cloud Firewall on the droplet |
+| RPi can't connect on 1883 | port 1883 blocked (same firewall check), or the Reserved IP isn't assigned to this droplet |
+
+---
+
+# Part B — Deploy the publisher to a Home Assistant RPi
 
 ## Prerequisites
 - SSH / terminal access to the HA OS Pi.
 - The four fixed values for that participant (see §"Per-home values"):
   `home_id`, MQTT `host/port/user/pass`, InfluxDB `host/db/user/pass`, and the device
   `entity_id` ↔ `power_entity_id` mappings.
-- The WattWise cloud reachable at **`129.212.160.129:1883`** (droplet, plain MQTT/TCP).
+- The WattWise cloud reachable at **`129.212.160.129:1883`** (droplet, plain MQTT/TCP) —
+  i.e. Part A is done.
 
 ---
 
