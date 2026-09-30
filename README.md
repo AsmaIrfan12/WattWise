@@ -89,7 +89,7 @@ Recent work made the platform real-time, self-healing and research-grade. Full p
 
 Full guide with every command: **[DEPLOY_DIGITALOCEAN.md](DEPLOY_DIGITALOCEAN.md)**. Summary:
 
-**Current droplet:** Reserved IP `206.189.23.174` (use this — it's stable). Recommended
+**Current droplet:** Reserved IP `129.212.160.129` (use this — it's stable). Recommended
 size **2 vCPU / 4 GB** (a 1 vCPU / 2 GB box works only *with swap* — see below).
 
 ```bash
@@ -105,8 +105,8 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
   && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Secrets — the .env files are gitignored, so copy them from a working machine (LAPTOP):
-#   scp .env             "root@206.189.23.174:~/wattwise/.env"
-#   scp "Server Side/.env" "root@206.189.23.174:~/wattwise/Server Side/.env"
+#   scp .env             "root@129.212.160.129:~/wattwise/.env"
+#   scp "Server Side/.env" "root@129.212.160.129:~/wattwise/Server Side/.env"
 
 docker compose up -d --build      # first boot ~2-3 min (schema + seed + bootstrap)
 docker compose ps                 # all Up/healthy
@@ -114,8 +114,8 @@ curl -s http://localhost/health   # {"status":"healthy"}
 ```
 
 Then:
-- **Admin portal:** `http://206.189.23.174:3000`
-- **User dashboard / API:** `http://206.189.23.174`
+- **Admin portal:** `http://129.212.160.129:3000`
+- **User dashboard / API:** `http://129.212.160.129`
 
 The stack is **IP-agnostic** (nginx `server_name _`, relative API paths) — only the
 **clients** (Android app + RPis) need the address; the server needs no domain to run.
@@ -166,7 +166,7 @@ data. Bundle: [`Sensing Layer/deployments/asma-irfan/`](Sensing%20Layer/deployme
 | | Password | `WattWise2024!` |
 | **Cloud MQTT** (broker) | Username | `home_001` |
 | | Password | `WW_Home001_RPi_2026!` |
-| | Broker (droplet) | `206.189.23.174:1883` · transport **tcp** · tls **false** |
+| | Broker (droplet) | `129.212.160.129:1883` · transport **tcp** · tls **false** |
 | | Broker (domain+TLS) | `<domain>:443` · transport websockets · path `/mqtt` · tls true |
 | **Local InfluxDB** (on her RPi) | Host | `localhost:8086`, db `homeassistant`, ssl false |
 | | Username | `homeassistant` |
@@ -186,7 +186,7 @@ is the HA InfluxDB tag the publisher reads:
 `rpi_publisher_config.yaml` (or the add-on's `/config/wattwise_publisher.yaml`) to:
 ```yaml
 mqtt:
-  host: "206.189.23.174"
+  host: "129.212.160.129"
   port: 1883
   transport: "tcp"
   ws_path: ""
@@ -220,7 +220,7 @@ Each RPi may only publish to `wattwise/homes/home_NNN/#`. **`home_001` = Asma (r
 ## 5. Android app
 
 - Package `com.wattwise.userapp` · v4.0.0 · min SDK 26 · Compose + Hilt + WebView.
-- **Default server is the droplet** (`http://206.189.23.174`, port 80, HTTP) — a fresh
+- **Default server is the droplet** (`http://129.212.160.129`, port 80, HTTP) — a fresh
   install connects with no setup. Users can change it in Settings.
 - Build an installable APK:
   ```bash
@@ -264,7 +264,7 @@ persona classifier need data first:
 | Home not in rankings | rankings built by the daily job (01:30) | next day |
 | "Service temporarily unavailable" / "analytics failed" | backend/MySQL OOM on a 2 GB droplet | ensure **4 GB swap**; resize to 2 vCPU / 4 GB |
 | Devices "on" but shown offline | online = reported in last 15 min | confirm the RPi/dummy is publishing |
-| Asma's home 0 / offline | her RPi isn't publishing to the droplet | set her `mqtt` to `206.189.23.174:1883` tcp (§4) |
+| Asma's home 0 / offline | her RPi isn't publishing to the droplet | set her `mqtt` to `129.212.160.129:1883` tcp (§4) |
 | `MQTT connect failed (rc=5)` | wrong MQTT user/pass, or `home.id` ≠ MQTT username | check §4 |
 | RPi "0 published" but MQTT + ping OK | InfluxDB add-on auth missing | set `influxdb.username/password` (§4) |
 
