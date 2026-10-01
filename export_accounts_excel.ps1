@@ -25,7 +25,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Air Fryer, Dishwasher, Kettle, Microwave, Toaster, Washing Machine"
         DeviceCount   = 6
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = "Real account — RPi sends live data to this home"
     },
@@ -41,7 +41,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Kettle, Microwave, Washing Machine"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -57,7 +57,7 @@ $accounts = @(
         HomeType      = "Semi-Detached"
         Devices       = "Air Fryer, Kettle, Dishwasher"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -73,7 +73,7 @@ $accounts = @(
         HomeType      = "Detached"
         Devices       = "Microwave, Toaster, Kettle, Washing Machine"
         DeviceCount   = 4
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -89,7 +89,7 @@ $accounts = @(
         HomeType      = "Flat"
         Devices       = "Air Fryer, Dishwasher, Microwave"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -105,7 +105,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Kettle, Toaster, Washing Machine, Microwave"
         DeviceCount   = 4
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -121,7 +121,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Dishwasher, Kettle, Washing Machine"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -137,7 +137,7 @@ $accounts = @(
         HomeType      = "Flat"
         Devices       = "Air Fryer, Microwave, Toaster"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -153,7 +153,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Dishwasher, Kettle, Microwave, Washing Machine"
         DeviceCount   = 4
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -169,7 +169,7 @@ $accounts = @(
         HomeType      = "Semi-Detached"
         Devices       = "Air Fryer, Toaster, Kettle"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -185,7 +185,7 @@ $accounts = @(
         HomeType      = "Detached"
         Devices       = "Microwave, Washing Machine, Dishwasher"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -201,7 +201,7 @@ $accounts = @(
         HomeType      = "Flat"
         Devices       = "Kettle, Air Fryer, Dishwasher, Toaster"
         DeviceCount   = 4
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -217,7 +217,7 @@ $accounts = @(
         HomeType      = "Terraced"
         Devices       = "Microwave, Toaster, Kettle"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -233,7 +233,7 @@ $accounts = @(
         HomeType      = "Semi-Detached"
         Devices       = "Washing Machine, Dishwasher, Air Fryer"
         DeviceCount   = 3
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     },
@@ -249,7 +249,7 @@ $accounts = @(
         HomeType      = "Semi-Detached"
         Devices       = "Kettle, Toaster, Microwave, Washing Machine"
         DeviceCount   = 4
-        ServerURL     = "https://wattwise.example.com"
+        ServerURL     = "https://www.talk2futurebuildings.systems"
         Port          = 443
         Notes         = ""
     }

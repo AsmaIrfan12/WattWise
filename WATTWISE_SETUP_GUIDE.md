@@ -2,8 +2,8 @@
 
 Version: 2026-03-30
 Project: WattWise (Cardiff University PhD Platform)
-Primary Production URL: https://wattwise.example.com
-API Docs: https://wattwise.example.com/docs
+Primary Production URL: https://www.talk2futurebuildings.systems
+API Docs: https://www.talk2futurebuildings.systems/docs
 
 ---
 
@@ -94,9 +94,9 @@ From Server Side/docker-compose.yml:
   - host 80 and 443
 
 Production users normally access the platform through:
-- https://wattwise.example.com/
-- https://wattwise.example.com/api/*
-- https://wattwise.example.com/mqtt (WebSocket endpoint)
+- https://www.talk2futurebuildings.systems/
+- https://www.talk2futurebuildings.systems/api/*
+- https://www.talk2futurebuildings.systems/mqtt (WebSocket endpoint)
 
 ---
 
@@ -136,7 +136,7 @@ docker compose ps
 Check backend health:
 
 ```bash
-curl https://wattwise.example.com/health
+curl https://www.talk2futurebuildings.systems/health
 ```
 
 Expected response:
@@ -253,7 +253,7 @@ docker exec -it wattwise-mysql mysql -u root -p
 ### 9.1 Create User Account
 
 ```bash
-curl -X POST https://wattwise.example.com/api/auth/signup \
+curl -X POST https://www.talk2futurebuildings.systems/api/auth/signup \
   -H "Content-Type: application/json" \
   -d '{"name":"Home User","email":"home.user@example.com","password":"SecurePass123!"}'
 ```
@@ -261,7 +261,7 @@ curl -X POST https://wattwise.example.com/api/auth/signup \
 ### 9.2 Login and Capture Token
 
 ```bash
-curl -X POST https://wattwise.example.com/api/auth/login \
+curl -X POST https://www.talk2futurebuildings.systems/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"home.user@example.com","password":"SecurePass123!"}'
 ```
@@ -271,7 +271,7 @@ Store access_token from response for subsequent calls.
 ### 9.3 Create Home
 
 ```bash
-curl -X POST https://wattwise.example.com/api/homes \
+curl -X POST https://www.talk2futurebuildings.systems/api/homes \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"home_name":"Home A","address":"Cardiff","num_occupants":3,"home_type":"terraced"}'
@@ -282,7 +282,7 @@ curl -X POST https://wattwise.example.com/api/homes \
 Register each appliance with correct HA entity IDs.
 
 ```bash
-curl -X POST https://wattwise.example.com/api/homes/<HOME_ID>/devices \
+curl -X POST https://www.talk2futurebuildings.systems/api/homes/<HOME_ID>/devices \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{

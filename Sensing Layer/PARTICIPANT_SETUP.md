@@ -2,7 +2,7 @@
 
 **Research Lead:** Mr. Suhas Devmane, Cardiff University  
 **Contact:** asmairfan12@gmail.com  
-**Platform:** https://wattwise.example.com
+**Platform:** https://www.talk2futurebuildings.systems
 
 ---
 
@@ -72,7 +72,7 @@ home:
 ### MQTT credentials
 ```yaml
 mqtt:
-  host: "wattwise.example.com"
+  host: "www.talk2futurebuildings.systems"
   port: 443
   transport: "websockets"
   ws_path: "/mqtt"
@@ -117,7 +117,7 @@ sudo journalctl -u wattwise-publisher -f
 
 A healthy publisher prints lines like:
 ```
-✅ MQTT connected to wattwise.example.com:443
+✅ MQTT connected to www.talk2futurebuildings.systems:443
 📊 InfluxDB reader initialised
 📤 Published kettle: {"power_watts": 2100.0, ...}
 ```
@@ -130,7 +130,7 @@ A healthy publisher prints lines like:
    (Settings → Apps → Special app access → Install unknown apps → enable for your browser or file manager)
 2. Open the APK file the researcher sent you and install it
 3. Open **WattWise** → tap **Settings** (gear icon)
-4. Verify the Server URL is: `https://wattwise.example.com`
+4. Verify the Server URL is: `https://www.talk2futurebuildings.systems`
 5. Tap **Log in** → enter your email and password
 
 The dashboard should load and show your energy data within a few minutes.

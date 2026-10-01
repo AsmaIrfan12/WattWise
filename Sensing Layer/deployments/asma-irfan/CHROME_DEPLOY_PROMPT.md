@@ -22,7 +22,7 @@ publisher will silently send zeros if the InfluxDB entity tags are wrong.
 - A small Python service (`rpi_mqtt_publisher.py`) must run on this RPi. Every 30s it
   reads the latest wattage per appliance from the local InfluxDB and publishes it over
   authenticated MQTT (WebSocket, TLS) to the WattWise cloud at
-  `wattwise.example.com`, which stores it against Asma's account.
+  `www.talk2futurebuildings.systems`, which stores it against Asma's account.
 - The cloud backend matches each reading to a device **by the `entity_id` string in the
   payload**. Those strings are fixed (listed below) — they must not change.
 
@@ -30,7 +30,7 @@ publisher will silently send zeros if the InfluxDB entity tags are wrong.
 
 | Setting | Value |
 |---|---|
-| MQTT broker host | `wattwise.example.com` (port 443, websockets, path `/mqtt`, TLS on) |
+| MQTT broker host | `www.talk2futurebuildings.systems` (port 443, websockets, path `/mqtt`, TLS on) |
 | MQTT username | `home_001` |
 | MQTT password | (the researcher gives you this — set it on the RPi only; never paste into a committed file) |
 | Topic home id | `home_001` (required by broker ACL — NOT the numeric id) |
@@ -123,12 +123,12 @@ A healthy run shows:
 ✅ Config loaded from /etc/wattwise/publisher.yaml (home_id=home_001, mqtt_user=home_001)
 📊 InfluxDB reader initialised: localhost:8086/homeassistant
 InfluxDB ping: ✅ OK
-✅ MQTT connected to wattwise.example.com:443
+✅ MQTT connected to www.talk2futurebuildings.systems:443
 🔄 Loop #1: 4 published, 0 errors
 ```
 
 Then confirm in the browser that the cloud received it: open
-`https://wattwise.example.com/` and check Asma's dashboard shows live
+`https://www.talk2futurebuildings.systems/` and check Asma's dashboard shows live
 wattage updating within ~5 minutes (or log in to the WattWise app / admin portal).
 
 ## Troubleshooting

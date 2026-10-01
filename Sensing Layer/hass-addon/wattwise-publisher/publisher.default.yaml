@@ -86,15 +86,15 @@ influxdb:
 
 # ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
 # `host` is the ONLY thing that changes when you move the cloud backend.
-#   • Cloudflare Tunnel (current): wattwise.example.com = placeholder for the real domain; port 443, wss
+#   • Cloudflare tunnel (current): www.talk2futurebuildings.systems, port 443, wss
 #     → REQUIRES that /mqtt is routed to nginx:80 (→ mosquitto:9001), not the admin
 #       frontend. If you get "WebSocket handshake error / 502", that route is wrong.
-#   • Other hosting: set host to that server's domain or IP. If TLS
+#   • DigitalOcean droplet (later): set host to the droplet's domain or IP. If TLS
 #     is fronted (nginx/Caddy/Cloudflare) keep port 443 + tls:true + ws_path:/mqtt.
 #     For a plain LAN/dev broker you can instead use TCP: port 1883, transport "tcp",
 #     tls:false, ws_path unused.
 mqtt:
-  host: "wattwise.example.com"     # ← the real domain (see HOW_TO_DEPLOY.md Part A)
+  host: "www.talk2futurebuildings.systems"     # ← change to your DigitalOcean domain/IP later
   port: 443
   transport: "websockets"
   ws_path: "/mqtt"

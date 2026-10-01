@@ -258,7 +258,7 @@ def _send_reset_email(to_email: str, reset_token: str, user_name: str) -> bool:
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_from = os.getenv("SMTP_FROM", "WattWise <noreply@wattwiser.org>")
-    base_url  = os.getenv("RESET_BASE_URL", "https://wattwise.example.com")
+    base_url  = os.getenv("RESET_BASE_URL", "https://www.talk2futurebuildings.systems")
 
     if not smtp_user or not smtp_pass:
         logging.getLogger("auth").warning(

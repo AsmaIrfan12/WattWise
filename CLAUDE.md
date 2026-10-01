@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 WattWise is a PhD research platform by Mr. Suhas Devmane (Cardiff University, COMSC) for community-level energy monitoring and decision-making. It spans three physical layers: Raspberry Pi sensing nodes → cloud backend → Android mobile app.
 
-Public address: `https://<your-domain>` — the Docker stack runs on a laptop/server and is exposed through a **Cloudflare Tunnel** (`cloudflared` compose service, profile `tunnel`); the placeholder `wattwise.example.com` in the repo stands for the real domain.
+Live production server: `https://www.talk2futurebuildings.systems` (Cloudflare Tunnel on port 443)
 
 ---
 

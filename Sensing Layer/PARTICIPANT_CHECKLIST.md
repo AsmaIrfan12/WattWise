@@ -15,7 +15,7 @@
   - [ ] Set `home.id` (e.g. `3`)
   - [ ] Set `mqtt.username` (e.g. `home_003`)
   - [ ] Set `mqtt.password` (from credentials slip)
-  - [ ] Set `mqtt.host: wattwise.example.com`
+  - [ ] Set `mqtt.host: www.talk2futurebuildings.systems`
   - [ ] Update device `entity_id` values from Home Assistant
 - [ ] Start publisher: `sudo systemctl start wattwise-publisher`
 - [ ] Verify running: `sudo journalctl -u wattwise-publisher -f` — should show `MQTT connected`
@@ -24,7 +24,7 @@
 
 - [ ] Enable "Install unknown apps" on Android device
 - [ ] Install APK file provided by researcher
-- [ ] Open WattWise → Settings → confirm server URL: `https://wattwise.example.com`
+- [ ] Open WattWise → Settings → confirm server URL: `https://www.talk2futurebuildings.systems`
 - [ ] Log in with your email/password from credentials slip
 - [ ] Dashboard loads and shows energy charts
 

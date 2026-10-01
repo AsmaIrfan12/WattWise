@@ -39,7 +39,7 @@ docker compose ps
 
 ```bash
 docker compose ps
-curl https://wattwise.example.com/health
+curl https://www.talk2futurebuildings.systems/health
 ```
 
 2. Backend Auth
@@ -64,7 +64,7 @@ if($srcHash -eq $ctrHash){'PARITY=YES'} else {'PARITY=NO'}
 Expected: PARITY=YES.
 
 4. Web User Journey
-- Open https://wattwise.example.com/
+- Open https://www.talk2futurebuildings.systems/
 - Login overlay appears for signed-out users.
 - Login with non-admin user succeeds.
 - Dashboard cards load readings and ranking.
