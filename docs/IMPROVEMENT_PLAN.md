@@ -135,7 +135,7 @@ RPi → MQTT(mqtt_client) → MySQL energy_readings + InfluxDB "W"
 ### Phase 0 — deploy hygiene (do first, already identified)
 - [ ] Push pending commits (`cdd771d` online-window, `a0c6e86` README) — needs write creds.
 - [ ] Droplet: 4 GB swap + resize to 2 vCPU / 4 GB (fixes "service unavailable/analytics failed").
-- [ ] Point Asma's RPi at `129.212.160.129:1883`; run `bootstrap-aggregator` after ~2 days.
+- [ ] Point Asma's RPi at `67.207.68.22:1883`; run `bootstrap-aggregator` after ~2 days.
 
 ### Phase 1 — "never empty, always fresh" (highest visible impact)
 - [ ] WS1 raw-data fallback for energy + device-timeseries + user dashboards.

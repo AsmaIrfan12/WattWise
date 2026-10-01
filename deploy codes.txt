@@ -65,11 +65,11 @@ sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp && su
 
 
 Then access (use the Reserved IP — it's stable)
-Admin portal: http://129.212.160.129:3000
-User dashboard / API: http://129.212.160.129
-RPi MQTT: host: 129.212.160.129, port: 1883, transport: "tcp", tls: false
-Android app: server URL http://129.212.160.129 (+ add it to network_security_config.xml cleartext, rebuild APK)
-Use the reserved IP 129.212.160.129 for the app and RPis — it survives droplet rebuilds, unlike the plain public IP.
+Admin portal: http://67.207.68.22:3000
+User dashboard / API: http://67.207.68.22
+RPi MQTT: host: 67.207.68.22, port: 1883, transport: "tcp", tls: false
+Android app: server URL http://67.207.68.22 (+ add it to network_security_config.xml cleartext, rebuild APK)
+Use the reserved IP 67.207.68.22 for the app and RPis — it survives droplet rebuilds, unlike the plain public IP.
 
 
 
@@ -89,7 +89,7 @@ influxdb:
 Replace the whole mqtt: block with:
 
 mqtt:
-  host: "129.212.160.129"     # ← droplet Reserved IP (was the Cloudflare domain)
+  host: "67.207.68.22"     # ← droplet Reserved IP (was the Cloudflare domain)
   port: 1883                 # ← was 443
   transport: "tcp"           # ← was websockets
   ws_path: ""                # ← unused for tcp
@@ -103,7 +103,7 @@ Why TCP instead of wss
 Over a bare IP there's no TLS certificate, and the publisher forces TLS whenever transport: websockets — so ws:// on port 80 would fail the handshake. Direct MQTT TCP on 1883 is the clean no-TLS path. (You already opened 1883 in the firewall step.)
 
 Before you start it, confirm on the server side
-Droplet 1883 reachable — from the RPi: nc -vz 129.212.160.129 1883 (or the publisher will just retry).
+Droplet 1883 reachable — from the RPi: nc -vz 67.207.68.22 1883 (or the publisher will just retry).
 The droplet DB is seeded so Asma's 4 devices exist with the matching entity_ids (the seed now pins them, so a fresh docker compose up creates sensor.airfryer_04d1f4 etc. automatically).
 Run it
 Foreground test (same as before, in the SSH terminal):
@@ -112,7 +112,7 @@ Foreground test (same as before, in the SSH terminal):
 cd ~/wattwise/"Sensing Layer/deployments/asma-irfan"
 nano rpi_publisher_config.yaml        # make the 2 edits above
 python3 rpi_mqtt_publisher.py --config rpi_publisher_config.yaml
-Expect ✅ MQTT connected to 129.212.160.129:1883, InfluxDB ping: ✅ OK, Loop #1: 4 published, 0 errors. Then check http://129.212.160.129:3000 → Asma's home online.
+Expect ✅ MQTT connected to 67.207.68.22:1883, InfluxDB ping: ✅ OK, Loop #1: 4 published, 0 errors. Then check http://67.207.68.22:3000 → Asma's home online.
 
 For permanent running (HA OS, survives reboot), put the same edited values into the add-on's /config/wattwise_publisher.yaml instead.
 
@@ -122,7 +122,7 @@ How to populate rankings
 Let data accumulate — the dummy sender (every 5 min) + Asma's RPi need to run, and the daily aggregation/rankings jobs need to tick over. Give it ~2 days.
 Then either:
 Click ⚙ Run Classifier in the admin portal, or
-curl -X POST http://129.212.160.129/api/admin/personas/run-classifier -H "Authorization: Bearer <ADMIN_TOKEN>", or
+curl -X POST http://67.207.68.22/api/admin/personas/run-classifier -H "Authorization: Bearer <ADMIN_TOKEN>", or
 Re-run the whole bootstrap (aggregates all history + ranks + classifies):
 
 docker compose run --rm bootstrap-aggregator

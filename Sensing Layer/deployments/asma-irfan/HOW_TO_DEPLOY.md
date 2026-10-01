@@ -18,9 +18,9 @@ This document has two parts — do them in order on a brand-new setup:
 # Part A — Deploy the WattWise cloud on a fresh droplet (Docker)
 
 Target: a fresh **Ubuntu 24.04 (LTS) x64** DigitalOcean droplet with the **Reserved IP
-`129.212.160.129`** assigned to it (DigitalOcean panel → Networking → Reserved IPs). Use the
+`67.207.68.22`** assigned to it (DigitalOcean panel → Networking → Reserved IPs). Use the
 Reserved IP everywhere — it survives droplet rebuilds, the plain public IPv4 does not.
-Size: **2 vCPU / 4 GB** (chosen). Do **not** use the 512 MB or 1 GB sizes — MySQL gets
+Size: **2 vCPU / 2 GB** ($18/mo) with the 4 GB swap from A1, or 2 vCPU / 4 GB. Do **not** use the 512 MB or 1 GB sizes — MySQL gets
 OOM-killed during its first-time setup and leaves a half-initialised database (see A7).
 
 > A new droplet starts empty. MySQL / InfluxDB data from a destroyed droplet is gone unless
@@ -29,7 +29,7 @@ OOM-killed during its first-time setup and leaves a half-initialised database (s
 
 ## A1. On the droplet — install Docker and prepare the box
 ```bash
-ssh root@129.212.160.129
+ssh root@67.207.68.22
 
 # Docker Engine + Compose plugin
 apt update && apt -y upgrade
@@ -53,8 +53,8 @@ git clone https://github.com/AsmaIrfan12/WattWise.git /opt/wattwise
 Both `.env` files are gitignored, so they never arrive with `git clone`. From the repo root
 on the laptop (PowerShell):
 ```powershell
-scp .env "root@129.212.160.129:/opt/wattwise/.env"
-scp "Server Side/.env" "root@129.212.160.129:/opt/wattwise/Server Side/.env"
+scp .env "root@67.207.68.22:/opt/wattwise/.env"
+scp "Server Side/.env" "root@67.207.68.22:/opt/wattwise/Server Side/.env"
 ```
 No laptop copy? Create them from `.env.example` and `Server Side/.env.production.template`.
 The stack is IP-agnostic — nothing in either file needs the droplet's address.
@@ -72,11 +72,11 @@ curl -s http://localhost/health   # {"status":"healthy"}
 ## A4. Check it from outside
 | What | Address |
 |---|---|
-| User dashboard / API | `http://129.212.160.129` |
-| Admin portal | `http://129.212.160.129:3000` (login: `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `Server Side/.env`) |
-| MQTT for RPis | `129.212.160.129:1883` · transport tcp · tls false |
+| User dashboard / API | `http://67.207.68.22` |
+| Admin portal | `http://67.207.68.22:3000` (login: `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `Server Side/.env`) |
+| MQTT for RPis | `67.207.68.22:1883` · transport tcp · tls false |
 
-From any other machine: `nc -vz 129.212.160.129 1883` should connect.
+From any other machine: `nc -vz 67.207.68.22 1883` should connect.
 
 Expect a warm-up: energy totals stay `0 kWh` for ~30–60 min until the hourly aggregation
 runs; rankings fill the next day; personas need ~2 days of data.
@@ -92,13 +92,13 @@ docker compose down                              # stop (data volumes are kept)
 ```
 
 ## A6. After the cloud is up
-- **RPis:** every Pi must publish to `129.212.160.129:1883` — new Pi → Part B; existing Pi →
+- **RPis:** every Pi must publish to `67.207.68.22:1883` — new Pi → Part B; existing Pi →
   change `mqtt.host` in `/config/wattwise_publisher.yaml` and restart the add-on.
 - **Android app:** the default server URL is compiled in (`util/Constants.kt`). Rebuild and
   reinstall the APK (`./gradlew assembleDebug` in `User Apps/Android/WattWiseUserApp`), or
   change the server address in the app's Settings on existing installs.
 - **CI auto-deploy (optional):** for pushes to `main` to deploy here, set the GitHub secret
-  `PROD_HOST` to `129.212.160.129` and add the `PROD_SSH_KEY` public key to the droplet's
+  `PROD_HOST` to `67.207.68.22` and add the `PROD_SSH_KEY` public key to the droplet's
   `~/.ssh/authorized_keys`.
 
 ## A7. Cloud troubleshooting
@@ -121,7 +121,7 @@ docker compose down                              # stop (data volumes are kept)
 - The four fixed values for that participant (see §"Per-home values"):
   `home_id`, MQTT `host/port/user/pass`, InfluxDB `host/db/user/pass`, and the device
   `entity_id` ↔ `power_entity_id` mappings.
-- The WattWise cloud reachable at **`129.212.160.129:1883`** (droplet, plain MQTT/TCP) —
+- The WattWise cloud reachable at **`67.207.68.22:1883`** (droplet, plain MQTT/TCP) —
   i.e. Part A is done.
 
 ---
@@ -177,7 +177,7 @@ influxdb:
   password: "<influxdb_password_from_secrets.yaml>"
   ssl: false
 mqtt:
-  host: "129.212.160.129"                # WattWise droplet
+  host: "67.207.68.22"                # WattWise droplet
   port: 1883
   transport: "tcp"
   ws_path: ""
@@ -209,13 +209,13 @@ and confirm this sequence, repeating every 30 s with `0 errors`:
 ```
 ✅ Config loaded ... (home_id=..., mqtt_user=...)
 📊 InfluxDB reader initialised: localhost:8086/homeassistant
-✅ MQTT connected to 129.212.160.129:1883
+✅ MQTT connected to 67.207.68.22:1883
 InfluxDB ping: ✅ OK
 🔄 Loop #1: 4 published, 0 errors
 ```
 
 ## 8. Cloud-side confirmation
-Open `http://129.212.160.129:3000`, log in with the **admin portal** credentials (separate from
+Open `http://67.207.68.22:3000`, log in with the **admin portal** credentials (separate from
 the MQTT/InfluxDB creds — see `Server Side/.env`: `ADMIN_EMAIL` / `ADMIN_PASSWORD`), and confirm
 the home shows **online** with live wattage within ~2 minutes.
 
@@ -230,7 +230,7 @@ the home shows **online** with live wattage within ~2 minutes.
 | device `entity_id` (cloud) | admin DB / the participant's registered devices | `sensor.airfryer_04d1f4`, `sensor.dishwasher_aebe90`, `sensor.microwave_821ec2`, `sensor.washing_machine_b612c5` |
 | device `power_entity_id` (InfluxDB tag) | §6 `SHOW TAG VALUES` on that Pi | `airfryer_current_consumption`, `dishwasher_current_consumption`, `microwave_current_consumption`, `washing_machine_current_consumption` |
 
-Keep `appliance_key` values as the standard set; `mqtt.host` (`129.212.160.129`) and the
+Keep `appliance_key` values as the standard set; `mqtt.host` (`67.207.68.22`) and the
 `influxdb` host/db/username (`localhost` / `homeassistant` / `homeassistant`) are the same for
 every home. A ready-to-edit template with Asma's device mappings is in this folder's
 `rpi_publisher_config.yaml` and the add-on's `publisher.default.yaml`.
