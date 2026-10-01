@@ -4,7 +4,7 @@
 # Usage examples:
 #   .\create_cardiff_50_participants.ps1
 #   .\create_cardiff_50_participants.ps1 -Count 50 -BaseUrl "http://129.212.138.248"
-#   .\create_cardiff_50_participants.ps1 -Count 30 -BaseUrl "https://www.talk2futurebuildings.systems"
+#   .\create_cardiff_50_participants.ps1 -Count 30 -BaseUrl "https://wattwise.example.com"
 #
 # What it does per participant:
 #   1) Signup (or login if account already exists)

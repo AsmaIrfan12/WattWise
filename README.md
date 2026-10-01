@@ -85,45 +85,48 @@ Recent work made the platform real-time, self-healing and research-grade. Full p
 
 ---
 
-## 2. Deploy to a DigitalOcean droplet (production)
+## 2. Deploy on a laptop + Cloudflare Tunnel (production)
 
-Full guide with every command: **[DEPLOY_DIGITALOCEAN.md](DEPLOY_DIGITALOCEAN.md)**. Summary:
+The whole stack runs with Docker on any machine — a laptop is fine — and is published on
+your own domain through a **Cloudflare Tunnel**. The tunnel is an *outbound* connection
+from the `cloudflared` container to Cloudflare, so **no router port-forwarding, no public
+IP and no TLS certificates** are needed; Cloudflare terminates HTTPS and forwards to nginx.
 
-**Current droplet:** Reserved IP `129.212.160.129` (use this — it's stable). Recommended
-size **2 vCPU / 4 GB** (a 1 vCPU / 2 GB box works only *with swap* — see below).
+Step-by-step runbook (Windows / macOS / Linux):
+**[Sensing Layer/deployments/asma-irfan/HOW_TO_DEPLOY.md](Sensing%20Layer/deployments/asma-irfan/HOW_TO_DEPLOY.md)** (Part A).
+Summary:
 
+1. **Domain on Cloudflare** — add the domain to a (free) Cloudflare account and switch its
+   nameservers to Cloudflare's at the registrar.
+2. **Tunnel** — Cloudflare dashboard → *Zero Trust → Networks → Tunnels → Create a tunnel
+   (Cloudflared)*. Copy the token. Add two **Public hostnames**:
+
+   | Public hostname | Service |
+   |---|---|
+   | `wattwise.example.com` (user dashboard, `/api`, `/mqtt`) | `HTTP` → `wattwise-nginx-proxy:80` |
+   | `admin.wattwise.example.com` (admin portal) | `HTTP` → `wattwise-admin-frontend:3000` |
+3. **Laptop** — install Docker Desktop (Windows/macOS) or Docker Engine (Linux), then:
+   ```bash
+   git clone https://github.com/AsmaIrfan12/WattWise.git wattwise && cd wattwise
+   cp .env.example .env                                              # fill CHANGE_ME values
+   cp "Server Side/.env.production.template" "Server Side/.env"      # fill REPLACE_ values
+   # In .env: COMPOSE_PROFILES=tunnel and CLOUDFLARE_TUNNEL_TOKEN=<token from step 2>
+   docker compose up -d --build      # first boot ~2-3 min (schema + seed + bootstrap)
+   docker compose ps                 # all Up/healthy; one-shot jobs show Exited (0)
+   curl -s http://localhost/health   # {"status":"healthy"}
+   curl -s https://wattwise.example.com/health   # same answer through the tunnel
+   ```
+4. **Keep it up** — Docker Desktop set to start at login, laptop sleep disabled
+   (see the runbook); every container has `restart: unless-stopped`.
+
+**`wattwise.example.com` is a placeholder.** Put the real domain in once, everywhere:
 ```bash
-# On the droplet (Docker + Compose already installed):
-cd ~ && git clone https://github.com/AsmaIrfan12/WattWise.git wattwise && cd wattwise
-
-# Firewall
-sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 3000/tcp \
-  && sudo ufw allow 1883/tcp && sudo ufw --force enable
-
-# Swap (REQUIRED on 2 GB — stops MySQL/InfluxDB being OOM-killed)
-sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile \
-  && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-
-# Secrets — the .env files are gitignored, so copy them from a working machine (LAPTOP):
-#   scp .env             "root@129.212.160.129:~/wattwise/.env"
-#   scp "Server Side/.env" "root@129.212.160.129:~/wattwise/Server Side/.env"
-
-docker compose up -d --build      # first boot ~2-3 min (schema + seed + bootstrap)
-docker compose ps                 # all Up/healthy
-curl -s http://localhost/health   # {"status":"healthy"}
+git grep -l wattwise.example.com | xargs sed -i 's/wattwise.example.com/YOUR.DOMAIN/g'
 ```
+then rebuild the Android app (§5) and update any RPi config (§4, §6).
 
-Then:
-- **Admin portal:** `http://129.212.160.129:3000`
-- **User dashboard / API:** `http://129.212.160.129`
-
-The stack is **IP-agnostic** (nginx `server_name _`, relative API paths) — only the
-**clients** (Android app + RPis) need the address; the server needs no domain to run.
-
-### Add a domain + HTTPS later
-Point a domain's A record at the droplet, issue a Let's Encrypt cert (nginx already has a
-`:443` block + certbot volumes), then switch the app to `https://your.domain` and RPis
-back to `wss` on 443.
+Local development without the tunnel: leave `COMPOSE_PROFILES` empty in `.env`.
+The old droplet-based procedure is kept in [DEPLOY_DIGITALOCEAN.md](DEPLOY_DIGITALOCEAN.md).
 
 ---
 
@@ -166,8 +169,8 @@ data. Bundle: [`Sensing Layer/deployments/asma-irfan/`](Sensing%20Layer/deployme
 | | Password | `WattWise2024!` |
 | **Cloud MQTT** (broker) | Username | `home_001` |
 | | Password | `WW_Home001_RPi_2026!` |
-| | Broker (droplet) | `129.212.160.129:1883` · transport **tcp** · tls **false** |
-| | Broker (domain+TLS) | `<domain>:443` · transport websockets · path `/mqtt` · tls true |
+| | Broker (Cloudflare Tunnel) | `wattwise.example.com:443` · transport **websockets** · path `/mqtt` · tls **true** |
+| | Broker (LAN / dev only) | `<laptop-ip>:1883` · transport tcp · tls false |
 | **Local InfluxDB** (on her RPi) | Host | `localhost:8086`, db `homeassistant`, ssl false |
 | | Username | `homeassistant` |
 | | Password | `Nabira2012!`  *(from her HA `secrets.yaml: influxdb_password`)* |
@@ -182,17 +185,17 @@ is the HA InfluxDB tag the publisher reads:
 | Microwave | `sensor.microwave_821ec2` | `microwave_current_consumption` |
 | Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_current_consumption` |
 
-**RPi config for the droplet** — set the `mqtt:` block in her
+**RPi config for the tunnel** — set the `mqtt:` block in her
 `rpi_publisher_config.yaml` (or the add-on's `/config/wattwise_publisher.yaml`) to:
 ```yaml
 mqtt:
-  host: "129.212.160.129"
-  port: 1883
-  transport: "tcp"
-  ws_path: ""
+  host: "wattwise.example.com"      # the real domain
+  port: 443
+  transport: "websockets"
+  ws_path: "/mqtt"
   username: "home_001"
   password: "WW_Home001_RPi_2026!"
-  tls: false
+  tls: true
 ```
 Home Assistant OS runtime = the **WattWise Publisher add-on**
 ([`Sensing Layer/hass-addon/wattwise-publisher/`](Sensing%20Layer/hass-addon/wattwise-publisher/)).
@@ -220,8 +223,9 @@ Each RPi may only publish to `wattwise/homes/home_NNN/#`. **`home_001` = Asma (r
 ## 5. Android app
 
 - Package `com.wattwise.userapp` · v4.0.0 · min SDK 26 · Compose + Hilt + WebView.
-- **Default server is the droplet** (`http://129.212.160.129`, port 80, HTTP) — a fresh
-  install connects with no setup. Users can change it in Settings.
+- **Default server is the domain** (`https://wattwise.example.com`, port 443) — after the
+  placeholder is replaced (§2) a fresh install connects with no setup. Users can change
+  it in Settings.
 - Build an installable APK:
   ```bash
   cd "User Apps/Android/WattWiseUserApp"
@@ -229,8 +233,8 @@ Each RPi may only publish to `wattwise/homes/home_NNN/#`. **`home_001` = Asma (r
   ```
   (Release falls back to the debug signing key when there's no `keystore.properties`, so
   the APK is installable for sideloading.)
-- To move to a domain later: edit `util/Constants.kt` (`DEFAULT_SERVER_URL`, `DEFAULT_PORT`)
-  and add the host to `res/xml/network_security_config.xml`, then rebuild.
+- The domain lives in `util/Constants.kt` (`DEFAULT_SERVER_URL`, `DEFAULT_PORT`) and
+  `res/xml/network_security_config.xml`; change both and rebuild if it ever moves.
 
 ---
 
@@ -262,9 +266,10 @@ persona classifier need data first:
 | Energy total `0 kWh` / `£0.00`, "home always 0" | summaries empty until the 30-min hourly-agg job runs | wait ~30–60 min after data flows |
 | "Persona = None / only Disengaged", empty compare | classifier needs ≥2 days of daily rankings + ≥12 engaged homes | let data run ~2 days, then **⚙ Run Classifier** (admin) or `bootstrap-aggregator` |
 | Home not in rankings | rankings built by the daily job (01:30) | next day |
-| "Service temporarily unavailable" / "analytics failed" | backend/MySQL OOM on a 2 GB droplet | ensure **4 GB swap**; resize to 2 vCPU / 4 GB |
+| "Service temporarily unavailable" / "analytics failed" | backend/MySQL out of memory | give Docker ≥ 4 GB RAM (Docker Desktop → Resources) |
+| Site down on the domain, `localhost/health` OK | tunnel not connected | `docker compose logs cloudflared`; check `CLOUDFLARE_TUNNEL_TOKEN` and `COMPOSE_PROFILES=tunnel` in `.env` |
 | Devices "on" but shown offline | online = reported in last 15 min | confirm the RPi/dummy is publishing |
-| Asma's home 0 / offline | her RPi isn't publishing to the droplet | set her `mqtt` to `129.212.160.129:1883` tcp (§4) |
+| Asma's home 0 / offline | her RPi isn't publishing to the tunnel | set her `mqtt` to `wattwise.example.com:443` websockets `/mqtt` tls (§4) |
 | `MQTT connect failed (rc=5)` | wrong MQTT user/pass, or `home.id` ≠ MQTT username | check §4 |
 | RPi "0 published" but MQTT + ping OK | InfluxDB add-on auth missing | set `influxdb.username/password` (§4) |
 

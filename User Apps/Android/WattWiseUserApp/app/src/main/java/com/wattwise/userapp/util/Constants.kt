@@ -12,13 +12,12 @@ package com.wattwise.userapp.util
 object Constants {
 
     // ── Production Server ────────────────────────────────────────
-    // Self-hosted Docker backend on a DigitalOcean droplet (Reserved IP).
-    // nginx serves the user dashboard + /api on port 80 (HTTP — bare IP, no TLS).
+    // Self-hosted Docker stack (laptop/server) exposed through a Cloudflare Tunnel.
+    // Cloudflare terminates TLS; nginx serves the user dashboard + /api behind it.
+    // Replace wattwise.example.com with the real domain (see README §2), then rebuild.
     // Users can override this in Settings.
-    //   • Droplet (current): http://129.212.160.129  (port 80)
-    //   • With a domain + TLS later: https://your.domain (port 443)
-    const val DEFAULT_SERVER_URL = "http://129.212.160.129"
-    const val DEFAULT_PORT       = 80                // nginx HTTP (bare IP, no TLS yet)
+    const val DEFAULT_SERVER_URL = "https://wattwise.example.com"
+    const val DEFAULT_PORT       = 443               // HTTPS via Cloudflare
     const val DEFAULT_API_PORT   = 8000              // FastAPI backend (internal, behind nginx)
     const val DEFAULT_TIMEOUT    = 20
 

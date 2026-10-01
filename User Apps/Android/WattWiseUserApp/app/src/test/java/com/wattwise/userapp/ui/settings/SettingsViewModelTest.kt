@@ -41,7 +41,7 @@ class SettingsViewModelTest {
         notifPrefs = mockk(relaxed = true)
 
         // Stub reactive flows
-        coEvery { repository.serverUrl } returns flowOf("https://www.talk2futurebuildings.systems")
+        coEvery { repository.serverUrl } returns flowOf("https://wattwise.example.com")
         coEvery { repository.port } returns flowOf(443)
         coEvery { repository.timeout } returns flowOf(20)
     }
@@ -58,7 +58,7 @@ class SettingsViewModelTest {
         } returns Resource.Success(200)
 
         viewModel = SettingsViewModel(repository, tokenDataStore, notifPrefs)
-        viewModel.testConnection("https://www.talk2futurebuildings.systems", 443)
+        viewModel.testConnection("https://wattwise.example.com", 443)
 
         advanceUntilIdle()
 

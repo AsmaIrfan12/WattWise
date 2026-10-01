@@ -317,6 +317,37 @@ services:
     networks:
       - wattwise-network
 
+  # ── Cloudflare Tunnel (outbound-only; no router port-forwarding) ──
+  # Publishes the stack on your domain from any machine (laptop included).
+  # Enabled by COMPOSE_PROFILES=tunnel in the root .env; the token comes from
+  # Cloudflare Zero Trust → Networks → Tunnels (see README §2).
+  # Public hostnames to configure in the Cloudflare dashboard:
+  #   <domain>        → http://wattwise-nginx-proxy:80     (user dashboard, /api, /mqtt)
+  #   admin.<domain>  → http://wattwise-admin-frontend:3000 (admin portal)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: wattwise-cloudflared
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      nginx-proxy:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - wattwise-network
+
   # ── Nginx Reverse Proxy ──────────────────────────────────
   # Cloudflare Tunnel terminates TLS externally; nginx receives plain HTTP on :80.
   # Route map:

@@ -1,18 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (HTTP) for the DigitalOcean droplet (bare IP, no TLS yet)
-         and local development servers. -->
+    <!-- Allow cleartext (HTTP) only for local development servers. -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">129.212.160.129</domain>  <!-- droplet Reserved IP -->
-        <domain includeSubdomains="false">144.126.193.109</domain> <!-- droplet public IP -->
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
     </domain-config>
 
-    <!-- Enforce HTTPS for production server -->
+    <!-- Production server (Cloudflare Tunnel, HTTPS only).
+         Replace wattwise.example.com with the real domain. -->
     <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">talk2futurebuildings.systems</domain>
+        <domain includeSubdomains="true">wattwise.example.com</domain>
     </domain-config>
 
     <!-- Block cleartext for all other hosts by default -->

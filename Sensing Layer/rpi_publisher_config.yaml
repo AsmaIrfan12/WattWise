@@ -84,7 +84,7 @@ influxdb:
 # Domain is mandatory — use the domain, NOT the bare IP address.
 # TLS is terminated by Cloudflare; nginx receives plain WebSocket on port 443.
 mqtt:
-  host: "www.talk2futurebuildings.systems"
+  host: "wattwise.example.com"
   port: 443
   transport: "websockets"
   ws_path: "/mqtt"

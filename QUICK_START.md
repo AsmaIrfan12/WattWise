@@ -26,7 +26,7 @@ curl http://localhost:8000/docs
 For production:
 
 ```bash
-curl https://www.talk2futurebuildings.systems/health
+curl https://wattwise.example.com/health
 ```
 
 ## 3. Verify Auth APIs

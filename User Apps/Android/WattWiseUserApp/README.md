@@ -4,7 +4,7 @@ Native Android application for the WattWise platform. It hosts the user dashboar
 
 ## Default Server
 
-Production: `https://www.talk2futurebuildings.systems` (port 443)
+Production: `https://wattwise.example.com` (port 443)
 Local dev: `http://<server-ip>:3001` (user frontend container)
 
 Change anytime via the ⚙ Settings button.

@@ -2,11 +2,11 @@
 # WattWise — Create 15 Test Accounts (PowerShell)
 # Usage: .\create_test_accounts.ps1 [-Remote]
 #   Default : hits localhost:8000 (fast — Docker running locally)
-#   -Remote : hits https://www.talk2futurebuildings.systems (slow — Cloudflare)
+#   -Remote : hits https://wattwise.example.com (slow — Cloudflare)
 ###############################################################################
 param([switch]$Remote)
 
-$BASE = if ($Remote) { "https://www.talk2futurebuildings.systems" } else { "http://localhost:8000" }
+$BASE = if ($Remote) { "https://wattwise.example.com" } else { "http://localhost:8000" }
 
 # ── Device catalogue (entity_id maps to InfluxDB measurement names) ──────────
 $DEVICE_CATALOGUE = @{

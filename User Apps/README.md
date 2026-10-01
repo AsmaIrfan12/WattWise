@@ -4,7 +4,7 @@ Professional user-facing applications for the IAA Air Quality Monitoring platfor
 
 ## Default Server
 
-Both apps default to: **`https://www.talk2futurebuildings.systems:3001`**
+Both apps default to: **`https://wattwise.example.com`**
 
 Users can edit the server URL and port at any time in each app's settings.
 
@@ -16,7 +16,7 @@ Users can edit the server URL and port at any time in each app's settings.
 | | |
 |---|---|
 | **Technology** | Python + PySide6 + Qt WebEngine |
-| **Default Server** | `https://www.talk2futurebuildings.systems:3001` |
+| **Default Server** | `https://wattwise.example.com` |
 
 ### Features
 - Embedded WebView UI (all tabs: Home, Data, Risk, Alerts, Ranking, Settings)
@@ -52,7 +52,7 @@ python src/main.py
 | | |
 |---|---|
 | **Technology** | Native Android (Kotlin) + WebView |
-| **Default Server** | `https://www.talk2futurebuildings.systems:3001` |
+| **Default Server** | `https://wattwise.example.com` |
 | **Min SDK** | Android 8.0 (API 26) |
 
 ### Features
@@ -76,7 +76,7 @@ Open in Android Studio → Gradle sync → Build APK → Run on device/emulator.
 
 | Server | URL Example |
 |--------|-------------|
-| **Production** | `https://www.talk2futurebuildings.systems:3001` |
+| **Production** | `https://wattwise.example.com` |
 | **Local (RPI)** | `http://localhost:3001` |
 | **Local (Android)** | `http://192.168.1.20:3001` (use your server's LAN IP) |
 | **Emulator** | `http://10.0.2.2:3001` |
