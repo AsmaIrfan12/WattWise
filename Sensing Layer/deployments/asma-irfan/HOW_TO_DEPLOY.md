@@ -20,7 +20,8 @@ This document has two parts — do them in order on a brand-new setup:
 Target: a fresh **Ubuntu 24.04 (LTS) x64** DigitalOcean droplet with the **Reserved IP
 `129.212.160.129`** assigned to it (DigitalOcean panel → Networking → Reserved IPs). Use the
 Reserved IP everywhere — it survives droplet rebuilds, the plain public IPv4 does not.
-Recommended size **2 vCPU / 4 GB**; a 1 vCPU / 2 GB box works only with the swap from A1.
+Size: **2 vCPU / 4 GB** (chosen). Do **not** use the 512 MB or 1 GB sizes — MySQL gets
+OOM-killed during its first-time setup and leaves a half-initialised database (see A7).
 
 > A new droplet starts empty. MySQL / InfluxDB data from a destroyed droplet is gone unless
 > you restore a backup; the 50 synthetic participants and the admin account are re-seeded
@@ -108,6 +109,8 @@ docker compose down                              # stop (data volumes are kept)
 | "Service temporarily unavailable", containers killed | out of memory — confirm swap with `free -h` (A1) or resize the droplet |
 | Dashboard unreachable from outside, `curl localhost/health` OK | firewall — `ufw status`, plus any DigitalOcean Cloud Firewall on the droplet |
 | RPi can't connect on 1883 | port 1883 blocked (same firewall check), or the Reserved IP isn't assigned to this droplet |
+| `wattwise-mysql` loops `Restarting (137)` / `dependency mysql failed to start` | MySQL is being OOM-killed: droplet too small or no swap — `sudo dmesg -T \| grep -i "out of memory"` confirms. Resize / add swap (A1), then do the next row |
+| backend can't log in to MySQL (`Access denied`) after MySQL was killed on first boot | the data volume holds a half-finished init (no `wattwise_db`, no app user). Reset it — it contains no real data yet: `docker compose down && docker volume rm wattwise_mysql_data && docker compose up -d` |
 
 ---
 
