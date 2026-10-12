@@ -116,12 +116,20 @@ def _validate_payload(payload: dict) -> tuple[float, float | None, float | None,
 
 # ── MQTT Callbacks ────────────────────────────────────────────
 
+# All backend workers join this group; the broker delivers each reading once per group.
+_SHARED_GROUP = "wattwise-ingest"
+
+
 def on_connect(client, userdata, flags, rc):
     global _mqtt_connected
     if rc == 0:
         _mqtt_connected = True
         logger.info("MQTT connected successfully")
-        topic = f"{settings.MQTT_TOPIC_PREFIX}/+/devices/+/data"
+        # Shared subscription: uvicorn runs 4 workers and each one connects to the
+        # broker. With a plain subscription every worker receives every reading and
+        # the row is written 4x. "$share/<group>/" makes Mosquitto deliver each
+        # message to ONE member of the group, so the workers load-balance instead.
+        topic = f"$share/{_SHARED_GROUP}/{settings.MQTT_TOPIC_PREFIX}/+/devices/+/data"
         client.subscribe(topic, qos=1)
         logger.info("Subscribed to: %s", topic)
 
