@@ -41,7 +41,7 @@ The add-on:
   📊 InfluxDB reader initialised: localhost:8086/homeassistant
   InfluxDB ping: ✅ OK
   ✅ MQTT connected to www.talk2futurebuildings.systems:443
-  🔄 Loop #1: 4 published, 0 errors
+  🔄 Loop #1: 6 published, 0 errors
   ```
 - Cloud: the home's dashboard / admin portal shows live wattage within ~5 minutes.
 

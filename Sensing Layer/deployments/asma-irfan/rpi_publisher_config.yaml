@@ -57,10 +57,18 @@ home:
       entity_id: "sensor.washing_machine_b612c5"          # cloud match — keep as-is
       power_entity_id: "washing_machine_current_consumption"  # HA InfluxDB tag (confirmed)
 
-  # NOTE: HA InfluxDB also has kettle_current_consumption and toaster_current_consumption,
-  # but Asma has no kettle/toaster device registered in the cloud, so they are not
-  # published (the backend would drop unmatched entity_ids). Ask the researcher to
-  # register them if she wants those tracked.
+    - id: "kettle"
+      name: "Kettle"
+      appliance_key: "kettle"
+      entity_id: "sensor.kettle_3f8a1c"                   # cloud match — keep as-is
+      power_entity_id: "kettle_current_consumption"       # HA InfluxDB tag (confirmed)
+
+    - id: "toaster"
+      name: "Toaster"
+      appliance_key: "toaster"
+      entity_id: "sensor.toaster_9c2e7b"                  # cloud match — keep as-is
+      power_entity_id: "toaster_current_consumption"      # HA InfluxDB tag (confirmed)
+
 
 # ── Local InfluxDB (Home Assistant's InfluxDB add-on on THIS RPi) ──────────────
 # The publisher runs on the RPi itself, so it reaches the add-on on localhost.

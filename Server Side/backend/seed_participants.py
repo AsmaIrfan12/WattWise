@@ -28,6 +28,8 @@ FIXED_DEVICES = {
         ("dishwasher",      "Dishwasher",      "sensor.dishwasher_aebe90"),
         ("microwave",       "Microwave",       "sensor.microwave_821ec2"),
         ("washing_machine", "Washing Machine", "sensor.washing_machine_b612c5"),
+        ("kettle",          "Kettle",          "sensor.kettle_3f8a1c"),
+        ("toaster",         "Toaster",         "sensor.toaster_9c2e7b"),
     ],
 }
 

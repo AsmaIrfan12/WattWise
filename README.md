@@ -172,7 +172,7 @@ data. Bundle: [`Sensing Layer/deployments/asma-irfan/`](Sensing%20Layer/deployme
 | | Username | `homeassistant` |
 | | Password | `Nabira2012!`  *(from her HA `secrets.yaml: influxdb_password`)* |
 
-**Her 4 devices** — `entity_id` is the cloud-match string (keep exact); `power_entity_id`
+**Her 6 devices** — `entity_id` is the cloud-match string (keep exact); `power_entity_id`
 is the HA InfluxDB tag the publisher reads:
 
 | Appliance | entity_id (cloud) | power_entity_id (HA InfluxDB) |
@@ -181,6 +181,8 @@ is the HA InfluxDB tag the publisher reads:
 | Dishwasher | `sensor.dishwasher_aebe90` | `dishwasher_current_consumption` |
 | Microwave | `sensor.microwave_821ec2` | `microwave_current_consumption` |
 | Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_current_consumption` |
+| Kettle | `sensor.kettle_3f8a1c` | `kettle_current_consumption` |
+| Toaster | `sensor.toaster_9c2e7b` | `toaster_current_consumption` |
 
 **RPi config for the droplet** — set the `mqtt:` block in her
 `rpi_publisher_config.yaml` (or the add-on's `/config/wattwise_publisher.yaml`) to:

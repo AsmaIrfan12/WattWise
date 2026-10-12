@@ -75,7 +75,7 @@ Success looks like:
 ```
 ✅ MQTT connected to <host>:443
 InfluxDB ping: ✅ OK
-🔄 Loop #1: 4 published, 0 errors
+🔄 Loop #1: 6 published, 0 errors
 ```
 `Ctrl+C` to stop once you're happy. The home shows **online** in the admin portal within
 a minute. (A foreground run stops when you close the terminal — make it permanent next.)

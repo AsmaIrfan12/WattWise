@@ -211,7 +211,7 @@ and confirm this sequence, repeating every 30 s with `0 errors`:
 📊 InfluxDB reader initialised: localhost:8086/homeassistant
 ✅ MQTT connected to 67.207.68.22:1883
 InfluxDB ping: ✅ OK
-🔄 Loop #1: 4 published, 0 errors
+🔄 Loop #1: 6 published, 0 errors
 ```
 
 ## 8. Cloud-side confirmation
@@ -227,8 +227,8 @@ the home shows **online** with live wattage within ~2 minutes.
 | `home.id` / `mqtt.username` | broker ACL — always `home_NNN` | `home_001` |
 | `mqtt.password` | `Server Side/.env` → `MQTT_HOME_0NN_PASS` | *(in `asma-home.secrets.local`)* |
 | `influxdb.password` | that Pi's HA `secrets.yaml` → `influxdb_password` | *(in `asma-home.secrets.local`)* |
-| device `entity_id` (cloud) | admin DB / the participant's registered devices | `sensor.airfryer_04d1f4`, `sensor.dishwasher_aebe90`, `sensor.microwave_821ec2`, `sensor.washing_machine_b612c5` |
-| device `power_entity_id` (InfluxDB tag) | §6 `SHOW TAG VALUES` on that Pi | `airfryer_current_consumption`, `dishwasher_current_consumption`, `microwave_current_consumption`, `washing_machine_current_consumption` |
+| device `entity_id` (cloud) | admin DB / the participant's registered devices | `sensor.airfryer_04d1f4`, `sensor.dishwasher_aebe90`, `sensor.microwave_821ec2`, `sensor.washing_machine_b612c5`, `sensor.kettle_3f8a1c`, `sensor.toaster_9c2e7b` |
+| device `power_entity_id` (InfluxDB tag) | §6 `SHOW TAG VALUES` on that Pi | `airfryer_current_consumption`, `dishwasher_current_consumption`, `microwave_current_consumption`, `washing_machine_current_consumption`, `kettle_current_consumption`, `toaster_current_consumption` |
 
 Keep `appliance_key` values as the standard set; `mqtt.host` (`67.207.68.22`) and the
 `influxdb` host/db/username (`localhost` / `homeassistant` / `homeassistant`) are the same for

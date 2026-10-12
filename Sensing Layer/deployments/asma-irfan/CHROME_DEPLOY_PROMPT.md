@@ -36,7 +36,7 @@ publisher will silently send zeros if the InfluxDB entity tags are wrong.
 | Topic home id | `home_001` (required by broker ACL — NOT the numeric id) |
 | InfluxDB | `localhost:8086`, database `homeassistant`, no auth (verify) |
 
-Asma's 4 registered devices — the **`entity_id`** is the cloud-match string (keep exactly),
+Asma's 6 registered devices — the **`entity_id`** is the cloud-match string (keep exactly),
 the **InfluxDB tag** is the real HA name (confirmed in Chronograf):
 
 | Appliance | entity_id (cloud match — keep) | InfluxDB entity_id tag (power_entity_id) |
@@ -45,9 +45,8 @@ the **InfluxDB tag** is the real HA name (confirmed in Chronograf):
 | Dishwasher | `sensor.dishwasher_aebe90` | `dishwasher_current_consumption` |
 | Microwave | `sensor.microwave_821ec2` | `microwave_current_consumption` |
 | Washing Machine | `sensor.washing_machine_b612c5` | `washing_machine_current_consumption` |
-
-(HA InfluxDB also has `kettle_current_consumption` and `toaster_current_consumption`,
-but Asma has no kettle/toaster registered in the cloud, so they are not published.)
+| Kettle | `sensor.kettle_3f8a1c` | `kettle_current_consumption` |
+| Toaster | `sensor.toaster_9c2e7b` | `toaster_current_consumption` |
 
 ## Phase 1 — Discover & verify the InfluxDB entity tags (browser)
 
@@ -124,7 +123,7 @@ A healthy run shows:
 📊 InfluxDB reader initialised: localhost:8086/homeassistant
 InfluxDB ping: ✅ OK
 ✅ MQTT connected to www.talk2futurebuildings.systems:443
-🔄 Loop #1: 4 published, 0 errors
+🔄 Loop #1: 6 published, 0 errors
 ```
 
 Then confirm in the browser that the cloud received it: open
