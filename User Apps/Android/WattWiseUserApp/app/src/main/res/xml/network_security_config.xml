@@ -1,21 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (HTTP) for the DigitalOcean droplet (bare IP, no TLS yet)
-         and local development servers. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">67.207.68.22</domain>  <!-- droplet Reserved IP -->
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-    </domain-config>
-
-    <!-- Enforce HTTPS for production server -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">talk2futurebuildings.systems</domain>
-    </domain-config>
-
-    <!-- Block cleartext for all other hosts by default -->
-    <base-config cleartextTrafficPermitted="false">
+    <!-- Cleartext (HTTP) is allowed to ANY host so that the server address can be
+         changed in the app's Settings without rebuilding the APK. The research
+         server is a bare-IP DigitalOcean droplet with no TLS. HTTPS hosts still
+         work; only system CAs are trusted. -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
