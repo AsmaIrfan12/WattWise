@@ -560,6 +560,64 @@ tr.row-click { cursor: pointer; }
       <div id="mqtt-broker-meta" style="font-size:11px;color:#94a3b8;padding:8px 4px 0">—</div>
     </div>
 
+    <!-- Homes: which households are reporting, and onboarding a new one -->
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <h2 class="card-title">Homes <span class="cohort-note" data-cohort-label></span></h2>
+        <div class="card-actions" style="display:flex;gap:8px;align-items:center">
+          <span id="homes-summary" style="font-size:12px;color:#9ca3af"></span>
+          <button class="btn-outline btn-sm" id="btn-refresh-homes">↻</button>
+          <button class="btn-primary btn-sm" id="btn-add-home">＋ Add a home</button>
+        </div>
+      </div>
+
+      <form id="home-form" style="display:none;border:1px solid #374151;border-radius:10px;padding:14px;margin:4px 4px 12px">
+        <div style="font-size:13px;color:#d1d5db;margin-bottom:10px">
+          Creates the participant's login, their home, its devices and the home's own MQTT account in one step,
+          then gives you the config file for the Raspberry Pi.
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <label class="form-label" style="flex:1;min-width:200px">Participant name
+            <input type="text" id="hf-name" class="input-field" maxlength="128" required/></label>
+          <label class="form-label" style="flex:1;min-width:220px">Participant email
+            <input type="email" id="hf-email" class="input-field" required/></label>
+          <label class="form-label" style="width:110px">Occupants
+            <input type="number" id="hf-occupants" class="input-field" min="1" max="20" value="1"/></label>
+          <label class="form-label" style="width:170px">Home type
+            <select id="hf-type" class="input-field">
+              <option value="flat">Flat</option><option value="terraced">Terraced</option>
+              <option value="semi-detached">Semi-detached</option><option value="detached">Detached</option>
+              <option value="other" selected>Other</option>
+            </select></label>
+        </div>
+        <div class="form-label" style="margin-top:8px">Devices (one row per smart plug)</div>
+        <div id="hf-devices"></div>
+        <button type="button" class="btn-outline btn-sm" id="hf-add-device" style="margin:6px 0 12px">＋ Add device</button>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="btn-primary btn-sm" id="hf-submit">Create home</button>
+          <button type="button" class="btn-outline btn-sm" id="hf-cancel">Cancel</button>
+        </div>
+        <div id="hf-feedback" class="form-feedback"></div>
+      </form>
+
+      <div id="home-result" style="display:none;border:1px solid #16a34a;border-radius:10px;padding:14px;margin:4px 4px 12px">
+        <div id="home-result-head" style="font-size:13px;color:#d1d5db;margin-bottom:8px"></div>
+        <textarea id="home-result-yaml" class="input-field textarea" rows="14" readonly style="font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn-primary btn-sm" id="home-result-copy">Copy config</button>
+          <button class="btn-outline btn-sm" id="home-result-download">Download .yaml</button>
+          <button class="btn-outline btn-sm" id="home-result-close">Close</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Status</th><th>Home</th><th>Participant</th><th>Data feed</th><th>MQTT account</th><th>Devices reporting</th><th>Last seen</th><th>Publisher</th><th></th></tr></thead>
+          <tbody id="homes-tbody"><tr><td colspan="9" class="loading-row">Loading homes…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header">
         <h2 class="card-title">RPi Device Status</h2>

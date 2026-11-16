@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     ANOMALY_MIN_BASELINE_KWH: float = 0.02
     ANOMALY_MIN_BASELINE_SAMPLES: int = 7
 
+    # Broker provisioning account (Mosquitto Dynamic Security admin) — used to create
+    # MQTT accounts for homes provisioned from the admin portal. Created by the
+    # mosquitto-init compose job; compose passes the same values to the backend.
+    MQTT_DYNSEC_USER: str = "wattwise_provisioner"
+    MQTT_DYNSEC_PASS: str = ""
+    # Address RPis use to reach the broker, written into generated publisher configs.
+    # Empty → the host the admin portal itself was opened on.
+    PUBLIC_MQTT_HOST: str = ""
+    PUBLIC_MQTT_PORT: int = 1883
+
     # MQTT ingestion: a reading is accepted only when its topic's home
     # (wattwise/homes/<mqtt_username>/…) is a registered home AND the device belongs
     # to that home. Set false only to fall back to the old global entity_id match.

@@ -25,10 +25,21 @@ services:
       - MQTT_HOME_013_PASS=${MQTT_HOME_013_PASS:-WW_Home013_RPi_2026!}
       - MQTT_HOME_014_PASS=${MQTT_HOME_014_PASS:-WW_Home014_RPi_2026!}
       - MQTT_HOME_015_PASS=${MQTT_HOME_015_PASS:-WW_Home015_RPi_2026!}
+      - MQTT_DYNSEC_USER=${MQTT_DYNSEC_USER:-wattwise_provisioner}
+      - MQTT_DYNSEC_PASS=${MQTT_DYNSEC_PASS:-${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}}
     volumes:
       - mosquitto_passwd_vol:/mosquitto/secret
+      - mosquitto_dynsec:/mosquitto/dynsec
+    # The password file (legacy accounts) is rebuilt from the environment on every start.
+    # The dynamic-security store (homes provisioned from the admin portal) is created ONCE
+    # and then left alone — it holds accounts that exist nowhere else.
     entrypoint: >
       sh -c "
+        if [ ! -s /mosquitto/dynsec/dynamic-security.json ]; then
+          mosquitto_ctrl dynsec init /mosquitto/dynsec/dynamic-security.json $$MQTT_DYNSEC_USER $$MQTT_DYNSEC_PASS &&
+          echo 'dynamic-security store created';
+        fi &&
+        chown -R mosquitto:mosquitto /mosquitto/dynsec &&
         rm -f /mosquitto/secret/passwd &&
         mosquitto_passwd -b -c /mosquitto/secret/passwd $$MQTT_USERNAME $$MQTT_PASSWORD &&
         mosquitto_passwd -b /mosquitto/secret/passwd wattwise_admin $$MQTT_ADMIN_PASS &&
@@ -66,6 +77,7 @@ services:
       - ./Server Side/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./Server Side/mosquitto/config/acl.conf:/mosquitto/config/acl.conf:ro
       - mosquitto_passwd_vol:/mosquitto/secret:ro
+      - mosquitto_dynsec:/mosquitto/dynsec
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     environment:
@@ -190,6 +202,9 @@ services:
     environment:
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Same provisioning account the mosquitto-init job creates (see above).
+      MQTT_DYNSEC_USER: ${MQTT_DYNSEC_USER:-wattwise_provisioner}
+      MQTT_DYNSEC_PASS: ${MQTT_DYNSEC_PASS:-${MQTT_ADMIN_PASS:-WattWise_MQTT_Admin_2026!}}
     volumes:
       - backups_data:/backups
     deploy:
@@ -420,6 +435,7 @@ volumes:
   mosquitto_data:
   mosquitto_log:
   mosquitto_passwd_vol:
+  mosquitto_dynsec:
   influxdb_data:
   letsencrypt:
   certbot_webroot:

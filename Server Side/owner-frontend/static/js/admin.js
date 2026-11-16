@@ -370,6 +370,149 @@ async function saveNotifTemplate() {
   } catch (err) { toast('Could not save template: ' + err.message, 'error'); }
 }
 
+
+// ── Homes (which households report; onboarding a new one) ──────
+const APPLIANCE_OPTIONS = [
+  ['kettle', 'Kettle'], ['microwave', 'Microwave'], ['washing_machine', 'Washing machine'], ['dishwasher', 'Dishwasher'],
+  ['toaster', 'Toaster'], ['airfryer', 'Air fryer'], ['dryer', 'Dryer'], ['cooker', 'Cooker'], ['tv', 'TV'],
+  ['coffeemachine', 'Coffee machine'], ['gaming_console', 'Games console'], ['water_purifier', 'Water purifier'],
+];
+
+async function loadHomes() {
+  const tbody = document.getElementById('homes-tbody');
+  paintCohortLabels();
+  try {
+    const res = await api(`/api/admin/homes/status?cohort=${_cohort}`);
+    const s = res.summary;
+    document.getElementById('homes-summary').textContent =
+      `${s.rpi_homes} RPi home(s): ${s.rpi_online} online, ${s.rpi_offline} not reporting`;
+    const badge = st => st === 'online' ? '<span class="badge badge-enabled">● Online</span>'
+      : st === 'offline' ? '<span class="badge badge-disabled">● Offline</span>'
+      : '<span class="badge badge-diseng">Never seen</span>';
+    tbody.innerHTML = res.homes.length ? res.homes.map(hm => `<tr>
+        <td>${badge(hm.state)}</td>
+        <td>${h(hm.home_name)} <span style="color:#9ca3af">#${hm.home_id}</span></td>
+        <td>${h(hm.user_name)}${hm.is_synthetic ? ' <span class="tag-sim">synthetic</span>' : ''}<div class="dx-note">${h(hm.user_email)}</div></td>
+        <td>${hm.feed === 'rpi' ? 'Raspberry Pi' : hm.feed === 'generator' ? 'Data generator' : '—'}</td>
+        <td>${hm.mqtt_username ? h(hm.mqtt_username) + (hm.managed ? '' : ' <span class="tag-sim">legacy</span>') : '—'}</td>
+        <td>${hm.devices_reporting} / ${hm.devices}</td>
+        <td>${hm.last_seen_at ? fmtWhen(hm.last_seen_at) + `<div class="dx-note">${fmtDuration(hm.minutes_since_seen * 60)} ago</div>` : '—'}</td>
+        <td>${hm.publisher_status ? h(hm.publisher_status) : '—'}</td>
+        <td>${hm.mqtt_username ? `<button class="btn-sm btn-outline" data-home-act="config" data-home="${hm.home_id}">Config</button>` : ''}
+            ${hm.managed ? `<button class="btn-sm btn-outline" data-home-act="rotate" data-home="${hm.home_id}" data-name="${h(hm.mqtt_username)}">New password</button>` : ''}</td>
+      </tr>`).join('') : `<tr><td colspan="9" class="loading-row">No homes for ${COHORT_LABELS[_cohort]}</td></tr>`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="9" class="loading-row">Error: ${h(err.message)}</td></tr>`;
+  }
+}
+
+function addHomeDeviceRow(appliance = 'kettle') {
+  const row = document.createElement('div');
+  row.className = 'hf-device';
+  row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;align-items:center';
+  row.innerHTML = `
+    <select class="input-field hf-appliance" style="width:170px">${APPLIANCE_OPTIONS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+    <input type="text" class="input-field hf-dname" style="flex:1;min-width:150px" maxlength="128" placeholder="Name shown to the participant"/>
+    <input type="text" class="input-field hf-tag" style="flex:1;min-width:210px" maxlength="128" placeholder="Pi's InfluxDB tag (optional)"/>
+    <button type="button" class="btn-sm btn-outline hf-remove" title="Remove">✕</button>`;
+  row.querySelector('.hf-appliance').value = appliance;
+  const sync = () => {
+    const name = row.querySelector('.hf-dname');
+    if (!name.dataset.touched) name.value = row.querySelector('.hf-appliance').selectedOptions[0].textContent;
+  };
+  row.querySelector('.hf-appliance').addEventListener('change', sync);
+  row.querySelector('.hf-dname').addEventListener('input', e => { e.target.dataset.touched = '1'; });
+  row.querySelector('.hf-remove').addEventListener('click', () => row.remove());
+  sync();
+  document.getElementById('hf-devices').appendChild(row);
+}
+
+function showHomeResult(headHtml, yaml, filename) {
+  const box = document.getElementById('home-result');
+  document.getElementById('home-result-head').innerHTML = headHtml;
+  const ta = document.getElementById('home-result-yaml');
+  ta.value = yaml;
+  ta.dataset.filename = filename;
+  box.style.display = 'block';
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function submitHomeForm(e) {
+  e.preventDefault();
+  const fb = document.getElementById('hf-feedback');
+  const devices = Array.from(document.querySelectorAll('#hf-devices .hf-device')).map(r => ({
+    appliance_key: r.querySelector('.hf-appliance').value,
+    name: r.querySelector('.hf-dname').value.trim() || r.querySelector('.hf-appliance').selectedOptions[0].textContent,
+    power_entity_id: r.querySelector('.hf-tag').value.trim() || null,
+  }));
+  if (!devices.length) { fb.textContent = '❌ Add at least one device'; fb.className = 'form-feedback error'; return; }
+  const btn = document.getElementById('hf-submit');
+  btn.disabled = true; fb.textContent = 'Creating…'; fb.className = 'form-feedback';
+  try {
+    const res = await api('/api/admin/homes/provision', { method: 'POST', body: JSON.stringify({
+      participant_name: document.getElementById('hf-name').value.trim(),
+      participant_email: document.getElementById('hf-email').value.trim(),
+      num_occupants: parseInt(document.getElementById('hf-occupants').value, 10) || 1,
+      home_type: document.getElementById('hf-type').value,
+      devices,
+    }) });
+    document.getElementById('home-form').style.display = 'none';
+    document.getElementById('home-form').reset();
+    document.getElementById('hf-devices').innerHTML = '';
+    fb.textContent = '';
+    showHomeResult(
+      `<strong>${h(res.home_name)}</strong> created as <strong>${h(res.mqtt_username)}</strong>.` +
+      (res.temporary_app_password ? ` App login: <strong>${h(res.user_email)}</strong> / temporary password <strong>${h(res.temporary_app_password)}</strong>.` : ` App login: ${h(res.user_email)} (existing account).`) +
+      `<br>Paste this into the WattWise Publisher add-on on the participant's Raspberry Pi. <span style="color:#f59e0b">The MQTT password is shown only now.</span>`,
+      res.publisher_yaml, `wattwise_publisher_${res.mqtt_username}.yaml`);
+    loadHomes();
+  } catch (err) {
+    fb.textContent = `❌ ${err.message}`; fb.className = 'form-feedback error';
+  } finally { btn.disabled = false; }
+}
+
+function initHomesUi() {
+  document.getElementById('btn-refresh-homes').addEventListener('click', loadHomes);
+  document.getElementById('btn-add-home').addEventListener('click', () => {
+    const form = document.getElementById('home-form');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display === 'block' && !document.querySelector('#hf-devices .hf-device')) addHomeDeviceRow('kettle');
+  });
+  document.getElementById('hf-add-device').addEventListener('click', () => addHomeDeviceRow('microwave'));
+  document.getElementById('hf-cancel').addEventListener('click', () => { document.getElementById('home-form').style.display = 'none'; });
+  document.getElementById('home-form').addEventListener('submit', submitHomeForm);
+  document.getElementById('home-result-close').addEventListener('click', () => { document.getElementById('home-result').style.display = 'none'; });
+  document.getElementById('home-result-copy').addEventListener('click', async () => {
+    const ta = document.getElementById('home-result-yaml');
+    try { await navigator.clipboard.writeText(ta.value); } catch { ta.select(); document.execCommand('copy'); }
+    toast('Config copied', 'success');
+  });
+  document.getElementById('home-result-download').addEventListener('click', () => {
+    const ta = document.getElementById('home-result-yaml');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([ta.value], { type: 'text/yaml' }));
+    a.download = ta.dataset.filename || 'wattwise_publisher.yaml';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+  });
+  document.getElementById('homes-tbody').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-home-act]');
+    if (!btn) return;
+    const id = btn.dataset.home;
+    try {
+      if (btn.dataset.homeAct === 'config') {
+        const res = await api(`/api/admin/homes/${id}/publisher-config`);
+        showHomeResult(`Config for <strong>${h(res.mqtt_username)}</strong>. The MQTT password is not stored in readable form — use the one issued at creation, or “New password”.`,
+          res.publisher_yaml, `wattwise_publisher_${res.mqtt_username}.yaml`);
+      } else if (btn.dataset.homeAct === 'rotate') {
+        if (!confirm(`Issue a new MQTT password for ${btn.dataset.name}? Its Raspberry Pi stops publishing until the new config is pasted in.`)) return;
+        const res = await api(`/api/admin/homes/${id}/rotate-credentials`, { method: 'POST' });
+        showHomeResult(`New MQTT password issued for <strong>${h(res.mqtt_username)}</strong>. <span style="color:#f59e0b">Shown only now</span> — paste this config into the Pi and restart the add-on.`,
+          res.publisher_yaml, `wattwise_publisher_${res.mqtt_username}.yaml`);
+      }
+    } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
 // ── Navigation ──────────────────────────────────────────────
 function navigateTo(section) {
   document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
@@ -393,7 +536,7 @@ function navigateTo(section) {
     case 'personas': loadPersonas(); break;
     case 'rankings': loadRankings(); break;
     case 'analytics': loadAnalytics(); loadSankey(); break;
-    case 'devices': loadDevices(); loadMqttBrokerStats(); break;
+    case 'devices': loadHomes(); loadDevices(); loadMqttBrokerStats(); break;
     case 'notifications': loadTemplates(); loadNotifBreakdown(); break;
     case 'decisions': loadDecisionsSection(); break;
     case 'backup': loadBackups(); break;
@@ -1933,6 +2076,7 @@ function _stepRanking(direction) {
 window.addEventListener('DOMContentLoaded', async () => {
   if (!await checkAuth()) return;
   initDecisionsUi();
+  initHomesUi();
 
   // Navigation
   document.querySelectorAll('.nav-item').forEach(item => {

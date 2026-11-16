@@ -1,115 +1,34 @@
-# WattWise RPi MQTT Publisher — Config for Asma Irfan's RPi
-# ==========================================================
-# Self-contained deployment bundle. Copy this whole folder to the RPi, then:
-#   bash install_publisher.sh
-# The installer copies this file to /etc/wattwise/publisher.yaml.
+# WattWise RPi publisher — PLACEHOLDER config
+# ==========================================
+# Do not fill this in by hand. In the WattWise admin portal open
+#   Devices / RPi  →  Add a home
+# and paste the config it generates over this whole file
+# (/config/wattwise_publisher.yaml), then set the InfluxDB password and restart the add-on.
 #
-# Research Lead: Mr. Suhas Devmane, Cardiff University, UK
-#
-# Values below are filled from the admin/server side for Asma Irfan
-# (user_id 52, MySQL home_id 51, MQTT user home_001).
-#
-# The ONLY value you may still need to adjust is each device's `power_entity_id`
-# — that must match the entity_id TAG as stored in THIS RPi's Home Assistant
-# InfluxDB (see the per-device note). Confirm it in the InfluxDB add-on before
-# relying on the data. `entity_id` (sent to the cloud) must stay exactly as
-# written — the backend matches readings to Asma's devices by that string.
+# Until then the publisher will refuse to start: it has no home to publish as.
 
-# ── Home Identity ─────────────────────────────────────────────────
-# NOTE: home.id is the value used in the MQTT topic
-#   wattwise/homes/<home.id>/devices/<device.id>/data
-# It MUST be "home_001" to satisfy the broker ACL for user home_001.
-# (Asma's numeric MySQL homes.id is 51, but the backend matches readings
-#  by device entity_id, not by the topic home id — so use home_001 here.)
 home:
-  id: "home_001"
-  name: "Asma's Home"
+  id: "REPLACE_WITH_CONFIG_FROM_ADMIN_PORTAL"
+  name: "Unconfigured home"
+  devices: []
 
-  # Asma's 4 registered devices.
-  #   entity_id        = the exact string the cloud backend stores for the device.
-  #                      Readings are matched to Asma by THIS string — do NOT change it.
-  #   power_entity_id  = the entity_id TAG inside THIS RPi's HA InfluxDB (measurement
-  #                      "W", field "value"). CONFIRMED from Chronograf: the real
-  #                      appliance names, no "sensor." prefix.
-  #                      Verified via: SHOW TAG VALUES FROM "W" WITH KEY = "entity_id"
-  devices:
-    - id: "airfryer"
-      name: "Airfryer"
-      appliance_key: "airfryer"
-      entity_id: "sensor.airfryer_04d1f4"                 # cloud match — keep as-is
-      power_entity_id: "airfryer_current_consumption"     # HA InfluxDB tag (confirmed)
-
-    - id: "dishwasher"
-      name: "Dishwasher"
-      appliance_key: "dishwasher"
-      entity_id: "sensor.dishwasher_aebe90"               # cloud match — keep as-is
-      power_entity_id: "dishwasher_current_consumption"   # HA InfluxDB tag (confirmed)
-
-    - id: "microwave"
-      name: "Microwave"
-      appliance_key: "microwave"
-      entity_id: "sensor.microwave_821ec2"                # cloud match — keep as-is
-      power_entity_id: "microwave_current_consumption"    # HA InfluxDB tag (confirmed)
-
-    - id: "washing_machine"
-      name: "Washing Machine"
-      appliance_key: "washing_machine"
-      entity_id: "sensor.washing_machine_b612c5"          # cloud match — keep as-is
-      power_entity_id: "washing_machine_current_consumption"  # HA InfluxDB tag (confirmed)
-
-    - id: "kettle"
-      name: "Kettle"
-      appliance_key: "kettle"
-      entity_id: "sensor.kettle_3f8a1c"                   # cloud match — keep as-is
-      power_entity_id: "kettle_current_consumption"       # HA InfluxDB tag (confirmed)
-
-    - id: "toaster"
-      name: "Toaster"
-      appliance_key: "toaster"
-      entity_id: "sensor.toaster_9c2e7b"                  # cloud match — keep as-is
-      power_entity_id: "toaster_current_consumption"      # HA InfluxDB tag (confirmed)
-
-
-# ── Local InfluxDB (Home Assistant's InfluxDB add-on on THIS RPi) ──────────────
-# The publisher runs on the RPi itself, so it reaches the add-on on localhost.
-# The Tailscale URL (…/a0d7b954_influxdb) is only the remote ingress UI — do NOT
-# use it here. Port 8086 is the add-on's host port; HA's database is "homeassistant".
-#
-# CONFIRMED for Asma's RPi: the InfluxDB add-on has auth ENABLED, so username +
-# password are REQUIRED (without them every query is rejected and the publisher
-# silently reports "0 published"). The credentials are the ones HA itself uses —
-# find them on the RPi:
-#   username → /config/configuration.yaml  (influxdb: → username, usually "homeassistant")
-#   password → /config/secrets.yaml        (the value of influxdb_password)
-# Quick test:
-#   curl -s -G 'http://localhost:8086/query?db=homeassistant' -u 'homeassistant:<PASS>' \
-#     --data-urlencode "q=SELECT \"value\" FROM \"W\" WHERE entity_id='microwave_current_consumption' ORDER BY time DESC LIMIT 1"
 influxdb:
   host: "localhost"
   port: 8086
   database: "homeassistant"
-  username: "homeassistant"                       # HA InfluxDB integration user (configuration.yaml)
-  password: "REPLACE_WITH_INFLUXDB_PASSWORD"      # from HA secrets.yaml: influxdb_password
-  ssl: false                                      # set true ONLY if the add-on serves HTTPS-only on 8086
+  username: "homeassistant"
+  password: "REPLACE_WITH_INFLUXDB_PASSWORD"
+  ssl: false
 
-# ── WattWise Cloud MQTT Broker ────────────────────────────────────────────────
-# `host` is the ONLY thing that changes when you move the cloud backend.
-#   • Cloudflare tunnel (current): www.talk2futurebuildings.systems, port 443, wss
-#     → REQUIRES that /mqtt is routed to nginx:80 (→ mosquitto:9001), not the admin
-#       frontend. If you get "WebSocket handshake error / 502", that route is wrong.
-#   • DigitalOcean droplet (later): set host to the droplet's domain or IP. If TLS
-#     is fronted (nginx/Caddy/Cloudflare) keep port 443 + tls:true + ws_path:/mqtt.
-#     For a plain LAN/dev broker you can instead use TCP: port 1883, transport "tcp",
-#     tls:false, ws_path unused.
 mqtt:
-  host: "www.talk2futurebuildings.systems"     # ← change to your DigitalOcean domain/IP later
-  port: 443
-  transport: "websockets"
-  ws_path: "/mqtt"
-  username: "home_001"
-  password: "REPLACE_WITH_YOUR_MQTT_PASSWORD"  # ← set on the RPi only; never commit the real value
-  tls: true
+  host: "REPLACE_WITH_CONFIG_FROM_ADMIN_PORTAL"
+  port: 1883
+  transport: "tcp"
+  ws_path: ""
+  username: "REPLACE_WITH_CONFIG_FROM_ADMIN_PORTAL"
+  password: "REPLACE_WITH_CONFIG_FROM_ADMIN_PORTAL"
+  tls: false
 
-# ── Publisher Settings ────────────────────────────────────────────
-publish_interval_seconds: 30   # Read + publish every 30 seconds
-log_level: "INFO"              # DEBUG | INFO | WARNING | ERROR
+publish_interval_seconds: 30
+stale_after_seconds: 900
+log_level: "INFO"
