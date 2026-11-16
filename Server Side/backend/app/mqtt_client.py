@@ -145,7 +145,20 @@ def _count(outcome: str, detail: str = "") -> None:
 
 
 def get_ingest_stats() -> dict:
+    """This process's counters, or — in an API process — the worker's last report."""
+    if _role == "api":
+        return dict(_remote_ingest_stats)
     return dict(_ingest_stats)
+
+
+def publish_ingest_stats() -> None:
+    """Worker only: publish the counters (retained) for the API processes to show."""
+    if _mqtt_client is not None and _mqtt_connected:
+        _mqtt_client.publish(
+            INGEST_STATS_TOPIC,
+            json.dumps({**_ingest_stats, "reported_at": datetime.utcnow().isoformat(), "process": "worker"}),
+            qos=0, retain=True,
+        )
 
 
 def parse_topic(topic: str, prefix: str) -> tuple[str | None, str | None, str | None]:
@@ -199,31 +212,40 @@ def parse_reading_time(raw, now: datetime) -> datetime | None:
 
 # All backend workers join this group; the broker delivers each reading once per group.
 _SHARED_GROUP = "wattwise-ingest"
+# The worker process is the only ingester, with a FIXED client id and a persistent
+# session: while it is down (a deploy, a crash) the broker queues QoS-1 readings for
+# that client id and hands them over when it reconnects, so nothing is lost.
+WORKER_CLIENT_ID = "wattwise-ingest-worker"
+# The worker reports why readings were accepted/dropped here (retained), so the API
+# processes — which no longer see telemetry — can still show it in the admin panel.
+INGEST_STATS_TOPIC = "wattwise/system/ingest-stats"
+_role: str = "all"
+_remote_ingest_stats: dict = {}
+
+
+def subscriptions_for(role: str, prefix: str) -> list[tuple[str, int]]:
+    """(topic, qos) pairs a process of this role subscribes to."""
+    data, status = f"{prefix}/+/devices/+/data", f"{prefix}/+/status"
+    if role == "worker":
+        return [(data, 1), (status, 1), ("$SYS/broker/#", 0)]
+    if role == "api":
+        # No telemetry: only broker health and the worker's ingest report.
+        return [("$SYS/broker/#", 0), (INGEST_STATS_TOPIC, 0)]
+    # "all": several uvicorn workers share one process role, so use a shared
+    # subscription — the broker delivers each message to ONE of them.
+    return [(f"$share/{_SHARED_GROUP}/{data}", 1), (f"$share/{_SHARED_GROUP}/{status}", 0), ("$SYS/broker/#", 0)]
 
 
 def on_connect(client, userdata, flags, rc):
     global _mqtt_connected
     if rc == 0:
         _mqtt_connected = True
-        logger.info("MQTT connected successfully")
-        # Shared subscription: uvicorn runs 4 workers and each one connects to the
-        # broker. With a plain subscription every worker receives every reading and
-        # the row is written 4x. "$share/<group>/" makes Mosquitto deliver each
-        # message to ONE member of the group, so the workers load-balance instead.
-        topic = f"$share/{_SHARED_GROUP}/{settings.MQTT_TOPIC_PREFIX}/+/devices/+/data"
-        client.subscribe(topic, qos=1)
-        logger.info("Subscribed to: %s", topic)
-        # Publisher heartbeats and last-wills (one member of the group handles each).
-        status_topic = f"$share/{_SHARED_GROUP}/{settings.MQTT_TOPIC_PREFIX}/+/status"
-        client.subscribe(status_topic, qos=0)
-        logger.info("Subscribed to: %s", status_topic)
-
-        # Subscribe to broker telemetry so we can surface live stats in the admin panel.
-        # Mosquitto needs sys_interval > 0 (default 10s) for these to publish.
-        client.subscribe("$SYS/broker/#", qos=0)
-        logger.info("Subscribed to: $SYS/broker/# (broker telemetry)")
-    else:
-        logger.error("MQTT connection failed with code %s", rc)
+        logger.info("MQTT connected successfully (role=%s)", _role)
+        for topic, qos in subscriptions_for(_role, settings.MQTT_TOPIC_PREFIX):
+            client.subscribe(topic, qos=qos)
+            logger.info("Subscribed to: %s", topic)
+        return
+    logger.error("MQTT connection failed with code %s", rc)
 
 
 def on_disconnect(client, userdata, rc):
@@ -243,6 +265,14 @@ def on_message(client, userdata, msg):
             _broker_stats[msg.topic] = {"value": value, "ts": datetime.utcnow().isoformat()}
         except Exception as exc:
             logger.debug("Failed to cache broker stat %s: %s", msg.topic, exc)
+        return
+
+    if msg.topic == INGEST_STATS_TOPIC:
+        try:
+            _remote_ingest_stats.clear()
+            _remote_ingest_stats.update(json.loads(msg.payload.decode("utf-8")))
+        except ValueError:
+            pass
         return
 
     """Process incoming energy telemetry from smart plugs."""
@@ -453,15 +483,18 @@ async def _write_reading_to_db(
 
 # ── Lifecycle ─────────────────────────────────────────────────
 
-def start_mqtt():
-    global _mqtt_client, _loop
+def start_mqtt(role: str = "all"):
+    global _mqtt_client, _loop, _role
+    _role = role
     try:
         _loop = asyncio.get_running_loop()
     except RuntimeError:
         _loop = asyncio.get_event_loop()
     import uuid
-    client_id = f"wattwise-backend-{uuid.uuid4().hex[:8]}"
-    _mqtt_client = mqtt.Client(client_id=client_id, clean_session=True)
+    if role == "worker":
+        _mqtt_client = mqtt.Client(client_id=WORKER_CLIENT_ID, clean_session=False)
+    else:
+        _mqtt_client = mqtt.Client(client_id=f"wattwise-backend-{uuid.uuid4().hex[:8]}", clean_session=True)
 
     # Authenticated broker connection
     if settings.MQTT_USERNAME and settings.MQTT_PASSWORD:

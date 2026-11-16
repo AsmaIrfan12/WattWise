@@ -199,7 +199,10 @@ services:
         condition: service_started
       influxdb:
         condition: service_started
+    # HTTP only: ingestion and scheduled jobs live in the `worker` service below.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--log-level", "info"]
     environment:
+      PROCESS_ROLE: api
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Same provisioning account the mosquitto-init job creates (see above).
@@ -215,6 +218,51 @@ services:
         reservations:
           cpus: "0.5"
           memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - wattwise-network
+
+  # ── Worker: the single MQTT consumer + the single scheduler ──
+  # Keeps a persistent broker session under a fixed client id, so readings published
+  # while it restarts are queued by Mosquitto and delivered afterwards. Run exactly one.
+  worker:
+    build:
+      context: ./Server Side/backend
+      dockerfile: Dockerfile
+    container_name: wattwise-worker
+    restart: unless-stopped
+    env_file:
+      - ./Server Side/.env
+    command: ["python", "-m", "app.worker"]
+    environment:
+      PROCESS_ROLE: worker
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    stop_grace_period: 30s
+    # The image's healthcheck curls :8000, which the worker does not serve. It touches
+    # a heartbeat file every 30 s instead; healthy = touched within the last 2 minutes.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/wattwise-worker-alive') < 120 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+      influxdb:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
     logging:
       driver: "json-file"
       options:

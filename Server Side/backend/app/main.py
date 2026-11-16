@@ -204,6 +204,27 @@ async def _job_backfill_startup():
         logger.warning("Startup backfill failed: %s", e)
 
 
+def register_jobs() -> None:
+    """Add every scheduled job. Called by exactly one process (the worker, or the 'all' lock owner)."""
+    scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
+    scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
+    scheduler.add_job(_job_analytics_evaluator,"cron",       hour=0,    minute=30,         id="analytics_eval")
+    scheduler.add_job(_job_goal_check,         "interval",   hours=1,                     id="goal_check")
+    scheduler.add_job(_job_peak_reminder,      "cron",       hour=15,   minute=45,         id="peak_reminder")
+    scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
+    scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
+    scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
+    scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
+    scheduler.add_job(_job_classify_personas,  "interval",   hours=6,                     id="classify_personas")
+    scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
+    scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
+    scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
+    # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
+    scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
+    scheduler.add_job(_job_decision_reminders, "interval",   minutes=5,                   id="decision_reminders")
+    scheduler.add_job(_job_scheduled_campaigns,"interval",   minutes=1,                   id="scheduled_campaigns")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -213,9 +234,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("✅ Database tables ready")
 
-    # Start MQTT subscriber
-    start_mqtt()
-    logger.info("✅ MQTT subscriber started")
+    # MQTT: an API process only watches broker health; "all" also ingests telemetry.
+    role = settings.PROCESS_ROLE if settings.PROCESS_ROLE in ("all", "api") else "all"
+    start_mqtt(role)
+    logger.info("✅ MQTT client started (role=%s)", role)
 
     sec_warnings = _security_warnings()
     if sec_warnings:
@@ -241,32 +263,23 @@ async def lifespan(app: FastAPI):
     # fires 4x concurrently — including duplicate user alerts. A MySQL advisory lock held
     # for this process's lifetime picks one owner; the other 3 workers skip all jobs.
     global _scheduler_lock_conn
-    _scheduler_lock_conn = await engine.connect()
-    owns_scheduler = bool(
-        (await _scheduler_lock_conn.execute(text("SELECT GET_LOCK('ww_scheduler', 0)"))).scalar()
-    )
-    if not owns_scheduler:
+    if role == "api":
+        # Scheduled jobs run in the dedicated worker process (app.worker).
+        owns_scheduler = None
+        logger.info("ℹ️  API process — ingestion and scheduled jobs run in the worker")
+    else:
+        _scheduler_lock_conn = await engine.connect()
+        owns_scheduler = bool(
+            (await _scheduler_lock_conn.execute(text("SELECT GET_LOCK('ww_scheduler', 0)"))).scalar()
+        )
+    if owns_scheduler is None:
+        pass
+    elif not owns_scheduler:
         await _scheduler_lock_conn.close()
         _scheduler_lock_conn = None
         logger.info("ℹ️  Scheduler owned by another worker — this worker runs no scheduled jobs")
     else:
-        scheduler.add_job(_job_hourly_agg,         "interval",   minutes=30,                  id="hourly_agg")
-        scheduler.add_job(_job_daily_agg,          "cron",       hour=0,    minute=15,         id="daily_agg")
-        scheduler.add_job(_job_analytics_evaluator,"cron",       hour=0,    minute=30,         id="analytics_eval")
-        scheduler.add_job(_job_goal_check,         "interval",   hours=1,                     id="goal_check")
-        scheduler.add_job(_job_peak_reminder,      "cron",       hour=15,   minute=45,         id="peak_reminder")
-        scheduler.add_job(_job_daily_report,       "cron",       hour=7,    minute=0,          id="daily_report")
-        scheduler.add_job(_job_decision_impact,    "interval",   hours=2,                     id="decision_impact")
-        scheduler.add_job(_job_rankings,           "cron",       hour=1,    minute=30,         id="rankings")
-        scheduler.add_job(_job_weekly_email,       "cron",       day_of_week="mon", hour=8,    minute=0,  id="weekly_email")
-        scheduler.add_job(_job_classify_personas,  "interval",   hours=6,                     id="classify_personas")
-        scheduler.add_job(_job_smart_device_check, "interval",   hours=2,                                  id="smart_device_check")
-        scheduler.add_job(_job_notification_cleanup,"cron",       hour=3,    minute=0,          id="notification_cleanup")
-        scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
-        # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
-        scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
-        scheduler.add_job(_job_decision_reminders, "interval",   minutes=5,                   id="decision_reminders")
-        scheduler.add_job(_job_scheduled_campaigns,"interval",   minutes=1,                   id="scheduled_campaigns")
+        register_jobs()
         scheduler.start()
         logger.info("✅ This worker owns the scheduler — 14 jobs started (personas every 6 h; self-healing backfill)")
 

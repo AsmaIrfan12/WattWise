@@ -67,3 +67,24 @@ class TestHomeState:
 
     def test_offline_after_threshold(self):
         assert home_state(NOW - timedelta(minutes=16), "home_001", NOW, 15) == "offline"
+
+
+class TestProcessRoles:
+    from app.mqtt_client import subscriptions_for as _subs
+
+    def test_worker_is_the_only_role_that_consumes_telemetry_directly(self):
+        from app.mqtt_client import subscriptions_for
+        topics = dict(subscriptions_for("worker", PREFIX))
+        assert topics["wattwise/homes/+/devices/+/data"] == 1      # QoS 1, plain subscription
+        assert "wattwise/homes/+/status" in topics
+
+    def test_api_role_never_subscribes_to_telemetry(self):
+        from app.mqtt_client import subscriptions_for, INGEST_STATS_TOPIC
+        topics = [t for t, _ in subscriptions_for("api", PREFIX)]
+        assert not any("devices" in t for t in topics)
+        assert INGEST_STATS_TOPIC in topics and "$SYS/broker/#" in topics
+
+    def test_all_role_uses_a_shared_subscription(self):
+        from app.mqtt_client import subscriptions_for
+        topics = [t for t, _ in subscriptions_for("all", PREFIX)]
+        assert any(t.startswith("$share/") and t.endswith("/devices/+/data") for t in topics)

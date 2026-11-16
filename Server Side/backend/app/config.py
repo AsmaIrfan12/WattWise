@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     ANOMALY_MIN_BASELINE_KWH: float = 0.02
     ANOMALY_MIN_BASELINE_SAMPLES: int = 7
 
+    # What this process does:
+    #   api    — serves HTTP only (uvicorn workers). No ingestion, no scheduled jobs.
+    #   worker — the single MQTT consumer and the single scheduler (python -m app.worker).
+    #   all    — everything in one process (development, tests, single-container runs).
+    PROCESS_ROLE: str = "all"
+
     # Broker provisioning account (Mosquitto Dynamic Security admin) — used to create
     # MQTT accounts for homes provisioned from the admin portal. Created by the
     # mosquitto-init compose job; compose passes the same values to the backend.
