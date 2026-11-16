@@ -29,3 +29,13 @@ usage based on those interactions.
   `docker compose ps`. (The nginx configs now re-resolve upstreams, but the check stays.)
 - **Rule:** files copied into a container with `docker cp` vanish when it is recreated;
   re-copy before re-running a check, and never read "no output" as "passed".
+
+## 2026-11-16 — Rows shared by concurrent writers must not be updated inside each writer's transaction
+- **What happened:** I added "last seen" tracking by updating the `homes` row inside every
+  reading's insert transaction. A home's six devices report in the same instant, so six
+  transactions fought over one row and MySQL deadlocked; the losing reading was dropped.
+  A single-message test could not show it — it appeared only under the real traffic shape.
+- **Rule:** when many concurrent units of work touch one shared row (a parent, a counter,
+  a "last seen"), update it outside their transactions, throttled and claimed by one
+  writer. And test ingestion changes with a realistic burst (all of a home's devices at
+  once), not one message.
