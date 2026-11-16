@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     ENERGY_DEVICE_STANDBY_WATTS: float = 5.0
     ENERGY_USAGE_SPIKE_MULTIPLIER: float = 2.0  # 2× average = spike
 
+    # Hourly "unusual usage" (HIGH_CONSUMPTION) rule — evaluated on hourly_summary.
+    # An hour is flagged only when ALL of these hold:
+    #   kwh >= ANOMALY_MIN_KWH                      (absolute floor: a single kettle boil is ~0.07 kWh)
+    #   baseline >= ANOMALY_MIN_BASELINE_KWH        (the 30-day hour-of-day mean must be meaningful)
+    #   baseline has >= ANOMALY_MIN_BASELINE_SAMPLES days of history for that hour
+    #   kwh >= ANOMALY_FACTOR × baseline
+    ANOMALY_FACTOR: float = 3.0
+    ANOMALY_MIN_KWH: float = 0.25
+    ANOMALY_MIN_BASELINE_KWH: float = 0.02
+    ANOMALY_MIN_BASELINE_SAMPLES: int = 7
+
+    # Goal alerts: warn when a goal period reaches this % of its target
+    GOAL_WARNING_PERCENT: float = 80.0
+
     # Decision impact measurement window (hours)
     DECISION_MEASURE_WINDOW_HOURS: int = 2
 

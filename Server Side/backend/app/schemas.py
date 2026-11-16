@@ -2,7 +2,7 @@
 
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ── Auth ─────────────────────────────────────────────────────
@@ -146,6 +146,8 @@ class GoalCreate(BaseModel):
     end_date: Optional[date] = None
 
 class GoalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     user_id: int
     device_id: Optional[int]
@@ -159,6 +161,8 @@ class GoalResponse(BaseModel):
 
 class GoalProgressResponse(BaseModel):
     goal: GoalResponse
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
     current_kwh: float
     current_cost_gbp: float
     percentage_used: float

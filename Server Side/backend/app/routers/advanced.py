@@ -171,7 +171,7 @@ async def get_anomalies(
         readings = [
             {
                 "home_id":        home.id,
-                "home_name":      home.name,
+                "home_name":      home.home_name,
                 "day_date":       str(row.day_date),
                 "total_kwh":      float(row.total_kwh or 0),
                 "total_cost_gbp": float(row.total_cost_gbp or 0),
@@ -308,10 +308,10 @@ async def get_community_anomalies(
     home_map: dict[int, dict] = {}
     for agg, home in rows:
         if home.id not in home_map:
-            home_map[home.id] = {"home_name": home.name, "readings": []}
+            home_map[home.id] = {"home_name": home.home_name, "readings": []}
         home_map[home.id]["readings"].append({
             "home_id":   home.id,
-            "home_name": home.name,
+            "home_name": home.home_name,
             "day_date":  str(agg.day_date),
             "total_kwh": float(agg.total_kwh or 0),
         })

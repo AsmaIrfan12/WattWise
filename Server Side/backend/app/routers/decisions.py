@@ -37,8 +37,13 @@ async def record_decision(body: DecisionCreate, request: Request, db: AsyncSessi
     notif_result = await db.execute(
         select(Notification).where(Notification.id == body.notification_id, Notification.user_id == user_id)
     )
-    if not notif_result.scalar_one_or_none():
+    notif = notif_result.scalar_one_or_none()
+    if not notif:
         raise HTTPException(status_code=404, detail="Notification not found")
+    # The dashboard/app buttons send only {notification_id, decision_type}; without a
+    # device the tracker cannot measure energy_before/after, so inherit the device
+    # the notification was about.
+    device_id = body.device_id or notif.device_id
 
     # Check no duplicate decision for same notification
     existing = await db.execute(
@@ -56,7 +61,7 @@ async def record_decision(body: DecisionCreate, request: Request, db: AsyncSessi
         notification_id=body.notification_id,
         decision_type=body.decision_type,
         action_taken=body.action_taken,
-        device_id=body.device_id,
+        device_id=device_id,
         user_feedback_text=body.user_feedback_text,
         user_satisfaction=body.user_satisfaction,
     )
@@ -66,7 +71,7 @@ async def record_decision(body: DecisionCreate, request: Request, db: AsyncSessi
         user_id=user_id,
         interaction_type="RECORD_DECISION",
         notification_id=body.notification_id,
-        device_id=body.device_id,
+        device_id=device_id,
         metadata_json={"decision_type": body.decision_type},
     )
     db.add(log)

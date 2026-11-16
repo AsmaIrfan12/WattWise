@@ -558,8 +558,31 @@ async def evaluate_analytics_thresholds():
 
 # ── Bootstrap: aggregate ALL history on demand ────────────────
 
+def is_anomalous_hour(
+    kwh: float,
+    baseline_kwh: float,
+    baseline_samples: int,
+    threshold_factor: float,
+    min_kwh: float,
+    min_baseline_kwh: float,
+    min_baseline_samples: int,
+) -> bool:
+    """
+    The HIGH_CONSUMPTION rule for one (device, hour) bucket. All conditions must hold:
+      • enough history: baseline built from >= min_baseline_samples days for this hour-of-day
+      • meaningful baseline: baseline_kwh >= min_baseline_kwh (otherwise any use is "N× usual")
+      • material usage: kwh >= min_kwh (a kettle boil is ~0.07 kWh — never an "anomaly")
+      • relative spike: kwh >= threshold_factor × baseline_kwh
+    """
+    if baseline_samples < min_baseline_samples or baseline_kwh < min_baseline_kwh:
+        return False
+    if kwh < min_kwh:
+        return False
+    return kwh >= threshold_factor * baseline_kwh
+
+
 async def detect_and_notify_anomalies(
-    threshold_factor: float = 3.0,
+    threshold_factor: float | None = None,
     lookback_hours: int = 24,
 ) -> dict:
     """
@@ -567,14 +590,25 @@ async def detect_and_notify_anomalies(
     `threshold_factor × its 30-day baseline` for the same hour-of-day, and
     create a per-user notification about each anomaly found.
 
+    Floors (settings.ANOMALY_*) stop rarely-used appliances from being flagged on
+    every use: before them, a single kettle boil against a near-zero baseline was
+    reported as "9× your usual amount" and users received one of these per use.
+
     Idempotent — uses NotificationEngine's 12-hour dedup so re-running won't
     spam the same user about the same anomaly.
 
     Designed to run hourly via APScheduler.
     """
     from app.notification_engine import NotificationEngine
+    from app.config import settings
 
-    logger.info("Scanning for anomalous device usage (factor=%s, lookback=%sh)…", threshold_factor, lookback_hours)
+    threshold_factor = threshold_factor or settings.ANOMALY_FACTOR
+    min_kwh = settings.ANOMALY_MIN_KWH
+    min_baseline_kwh = settings.ANOMALY_MIN_BASELINE_KWH
+    min_samples = settings.ANOMALY_MIN_BASELINE_SAMPLES
+
+    logger.info("Scanning for anomalous device usage (factor=%s, min_kwh=%s, lookback=%sh)…",
+                threshold_factor, min_kwh, lookback_hours)
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     since = now - timedelta(hours=lookback_hours)
     baseline_window_start = now - timedelta(days=30)
@@ -586,11 +620,13 @@ async def detect_and_notify_anomalies(
                 HourlySummary.device_id,
                 func.hour(HourlySummary.hour_start).label("hod"),
                 func.avg(HourlySummary.total_kwh).label("baseline_avg_kwh"),
+                func.count(HourlySummary.id).label("samples"),
             )
             .where(HourlySummary.hour_start >= baseline_window_start)
             .group_by(HourlySummary.device_id, func.hour(HourlySummary.hour_start))
         )).all()
-        baseline = {(int(r.device_id), int(r.hod)): float(r.baseline_avg_kwh or 0) for r in baseline_rows}
+        baseline = {(int(r.device_id), int(r.hod)): (float(r.baseline_avg_kwh or 0), int(r.samples or 0))
+                    for r in baseline_rows}
 
         # Recent hourly buckets to evaluate
         from app.models import Notification
@@ -614,14 +650,13 @@ async def detect_and_notify_anomalies(
         skipped_below = 0
 
         for r in recent_rows:
-            baseline_val = baseline.get((int(r.device_id), r.hour_start.hour), 0)
-            if baseline_val <= 0.005:
-                continue
+            baseline_val, samples = baseline.get((int(r.device_id), r.hour_start.hour), (0.0, 0))
             kwh = float(r.total_kwh or 0)
-            ratio = kwh / baseline_val
-            if ratio < threshold_factor:
+            if not is_anomalous_hour(kwh, baseline_val, samples, threshold_factor,
+                                     min_kwh, min_baseline_kwh, min_samples):
                 skipped_below += 1
                 continue
+            ratio = kwh / baseline_val
 
             severity = "CRITICAL" if ratio >= threshold_factor * 2 else "WARNING"
             hour_label = r.hour_start.strftime("%H:%M")

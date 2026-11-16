@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import User, Notification, Device, Home, DailySummary, HomeDailyTotal
+from app.models import User, Notification, Device, Home, DailySummary, HomeDailyTotal, EnergyGoal
 
 logger = logging.getLogger("notification_engine")
 
@@ -198,35 +198,40 @@ class NotificationEngine:
     @staticmethod
     async def check_daily_goal_notifications(db: AsyncSession):
         """
-        For each user with an active daily goal, check progress and send alerts.
-        Called hourly by scheduler.
+        Hourly goal check. Two independent rules:
+
+        1. Whole-home daily ceiling — the user's `daily_energy_goal_kwh` (or the
+           system ENERGY_DAILY_WARNING_KWH default) against today's home total.
+        2. Goals the user created in the app (energy_goals: daily / weekly /
+           monthly, per device or whole home). For the current goal period:
+             • >= GOAL_WARNING_PERCENT of target  → GOAL_WARNING (once per period)
+             • >= 100 % of target                → ENERGY_ALERT  (once per period)
+             • previous period finished under target → GOAL_MET (once per period)
+
+        Notifications are in-app first; push is attempted only when the user
+        has registered a push token (see create_notification).
         """
-        logger.info("Checking daily goal notifications...")
+        logger.info("Checking goal notifications...")
         today = datetime.utcnow().date()
 
-        users_result = await db.execute(
-            select(User).where(User.notifications_enabled == True, User.push_token.isnot(None))
-        )
+        users_result = await db.execute(select(User).where(User.notifications_enabled.is_(True)))
         users = users_result.scalars().all()
 
         for user in users:
             try:
-                # Get user's homes
-                homes_result = await db.execute(select(Home).where(Home.user_id == user.id, Home.is_active == True))
+                homes_result = await db.execute(select(Home).where(Home.user_id == user.id, Home.is_active.is_(True)))
                 homes = homes_result.scalars().all()
 
+                # ── Rule 1: whole-home daily ceiling ────────────────────
                 for home in homes:
-                    # Get today's home total
                     total_result = await db.execute(
                         select(HomeDailyTotal).where(HomeDailyTotal.home_id == home.id, HomeDailyTotal.day_date == today)
                     )
                     today_total = total_result.scalar_one_or_none()
                     today_kwh = today_total.total_kwh if today_total else 0.0
-
-                    # Check against user's daily goal or system threshold
                     daily_goal = user.daily_energy_goal_kwh or settings.ENERGY_DAILY_WARNING_KWH
 
-                    if today_kwh >= daily_goal * 1.0 and today_kwh < daily_goal * 1.2:
+                    if daily_goal * 1.0 <= today_kwh < daily_goal * 1.2:
                         await NotificationEngine.create_notification(
                             db, user.id,
                             title="⚡ Daily Energy Goal Reached",
@@ -250,8 +255,125 @@ class NotificationEngine:
                             action_button_text="Take Action",
                             requires_user_action=True,
                         )
+
+                # ── Rule 2: user-created goals (energy_goals) ───────────
+                goals = (await db.execute(
+                    select(EnergyGoal).where(
+                        EnergyGoal.user_id == user.id,
+                        EnergyGoal.is_active.is_(True),
+                        EnergyGoal.start_date <= today,
+                    )
+                )).scalars().all()
+
+                for goal in goals:
+                    if goal.end_date and goal.end_date < today:
+                        continue
+                    if not goal.target_kwh or goal.target_kwh <= 0:
+                        continue
+                    await NotificationEngine._notify_goal_milestones(db, user, goal, today)
             except Exception as e:
                 logger.error(f"Error in goal notifications for user {user.id}: {e}")
+
+    @staticmethod
+    async def _goal_milestone_already_sent(db: AsyncSession, user_id: int, goal_id: int, milestone: str, period_start) -> bool:
+        """True if a notification for this goal/milestone/period already exists (hourly runs must be idempotent)."""
+        rows = (await db.execute(
+            select(Notification.metadata_json).where(
+                Notification.user_id == user_id,
+                Notification.notification_type.in_(("GOAL_WARNING", "ENERGY_ALERT", "GOAL_MET")),
+                Notification.created_at >= datetime.combine(period_start, datetime.min.time()) - timedelta(days=1),
+            )
+        )).all()
+        for (meta,) in rows:
+            if not meta:
+                continue
+            if (meta.get("goal_id") == goal_id and meta.get("milestone") == milestone
+                    and meta.get("period_start") == str(period_start)):
+                return True
+        return False
+
+    @staticmethod
+    async def _notify_goal_milestones(db: AsyncSession, user, goal, today):
+        from app.goal_tracker import evaluate_goal, previous_period_bounds, consumption_between
+
+        device_name = None
+        if goal.device_id:
+            device = (await db.execute(select(Device).where(Device.id == goal.device_id))).scalar_one_or_none()
+            device_name = device.name if device else "device"
+        label = f"{goal.goal_type} {device_name} goal" if device_name else f"{goal.goal_type} home goal"
+        period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}.get(goal.goal_type, "this period")
+
+        progress = await evaluate_goal(db, goal, today)
+        pct = progress["percentage_used"]
+        period_start = progress["period_start"]
+        target = progress["target_kwh"]
+        used = progress["current_kwh"]
+        days_left = progress["days_remaining"]
+        base_meta = {
+            "goal_id": goal.id, "device_id": goal.device_id,
+            "period_start": str(period_start), "period_end": str(progress["period_end"]),
+            "target_kwh": target, "current_kwh": used, "percentage_used": pct,
+        }
+
+        if pct >= 100:
+            if not await NotificationEngine._goal_milestone_already_sent(db, user.id, goal.id, "exceeded", period_start):
+                await NotificationEngine.create_notification(
+                    db, user.id,
+                    title=f"🚨 {label.capitalize()} exceeded",
+                    message=(
+                        f"You've used {used:.2f} kWh {period_word} against a target of {target:.2f} kWh "
+                        f"({pct:.0f}%). {days_left} day(s) left in this period — reducing use now still "
+                        f"counts towards your streak."
+                    ),
+                    notification_type="ENERGY_ALERT",
+                    severity="ALERT",
+                    device_id=goal.device_id,
+                    action_hint="Open Goals to review this target",
+                    action_button_text="View Goal",
+                    requires_user_action=True,
+                    metadata={**base_meta, "milestone": "exceeded"},
+                )
+        elif pct >= settings.GOAL_WARNING_PERCENT:
+            if not await NotificationEngine._goal_milestone_already_sent(db, user.id, goal.id, "warning", period_start):
+                if progress["on_track"] or progress["projected_kwh"] is None:
+                    outlook = "You're on track."
+                else:
+                    outlook = f"At this rate you'll reach about {progress['projected_kwh']:.2f} kWh — ease off to stay under target."
+                await NotificationEngine.create_notification(
+                    db, user.id,
+                    title=f"⚡ {pct:.0f}% of your {label} used",
+                    message=f"{used:.2f} of {target:.2f} kWh used {period_word}, with {days_left} day(s) to go. {outlook}",
+                    notification_type="GOAL_WARNING",
+                    severity="WARNING",
+                    device_id=goal.device_id,
+                    action_hint="Shift or shorten the next use of this appliance",
+                    action_button_text="View Goal",
+                    requires_user_action=True,
+                    metadata={**base_meta, "milestone": "warning"},
+                )
+
+        # Did the previous period finish under target? Celebrate once, within 2 days of it ending.
+        prev = previous_period_bounds(goal.goal_type, goal.start_date, today)
+        if prev and (today - prev[1]).days <= 2:
+            prev_kwh, _ = await consumption_between(db, goal, prev[0], prev[1])
+            if prev_kwh <= target and not await NotificationEngine._goal_milestone_already_sent(db, user.id, goal.id, "met", prev[0]):
+                await NotificationEngine.create_notification(
+                    db, user.id,
+                    title=f"🏆 {label.capitalize()} achieved",
+                    message=(
+                        f"You finished {prev[0]:%d %b}–{prev[1]:%d %b} on {prev_kwh:.2f} kWh, under your "
+                        f"{target:.2f} kWh target. Nice work — a new period has started."
+                    ),
+                    notification_type="GOAL_MET",
+                    severity="INFO",
+                    device_id=goal.device_id,
+                    action_button_text="View Goals",
+                    metadata={
+                        "goal_id": goal.id, "device_id": goal.device_id,
+                        "period_start": str(prev[0]), "period_end": str(prev[1]),
+                        "target_kwh": target, "current_kwh": round(prev_kwh, 3), "milestone": "met",
+                    },
+                )
 
     @staticmethod
     async def send_peak_tariff_reminder(db: AsyncSession):
@@ -259,9 +381,7 @@ class NotificationEngine:
         Send peak tariff reminder 15 minutes before peak hours start (3:45 PM UK time).
         """
         logger.info("Sending peak tariff reminders...")
-        users_result = await db.execute(
-            select(User).where(User.notifications_enabled == True, User.push_token.isnot(None))
-        )
+        users_result = await db.execute(select(User).where(User.notifications_enabled == True))
         users = users_result.scalars().all()
 
         for user in users:
@@ -283,9 +403,7 @@ class NotificationEngine:
         """
         yesterday = (datetime.utcnow() - timedelta(days=1)).date()
 
-        users_result = await db.execute(
-            select(User).where(User.notifications_enabled == True, User.push_token.isnot(None))
-        )
+        users_result = await db.execute(select(User).where(User.notifications_enabled == True))
         users = users_result.scalars().all()
 
         for user in users:
@@ -432,9 +550,7 @@ class NotificationEngine:
             return await asyncio.to_thread(_query_latest, measurement, entity_id)
 
         today = date.today()
-        users_result = await db.execute(
-            select(User).where(User.notifications_enabled == True, User.push_token.isnot(None))
-        )
+        users_result = await db.execute(select(User).where(User.notifications_enabled == True))
         users = users_result.scalars().all()
 
         for user in users:

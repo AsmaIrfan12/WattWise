@@ -173,10 +173,10 @@ async def _job_notification_cleanup():
 
 
 async def _job_anomaly_scan():
-    """Hourly scan: notify users of any device exceeding 3x its baseline."""
+    """Hourly scan: notify users of any device exceeding ANOMALY_FACTOR× its baseline (see config.ANOMALY_*)."""
     await _run_tracked_job(
         "anomaly_scan",
-        lambda: detect_and_notify_anomalies(threshold_factor=3.0, lookback_hours=2),
+        lambda: detect_and_notify_anomalies(lookback_hours=2),
     )
 
 

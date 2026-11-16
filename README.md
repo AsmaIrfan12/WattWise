@@ -265,6 +265,9 @@ persona classifier need data first:
 | "Persona = None / only Disengaged", empty compare | classifier needs ≥2 days of daily rankings + ≥12 engaged homes | let data run ~2 days, then **⚙ Run Classifier** (admin) or `bootstrap-aggregator` |
 | Home not in rankings | rankings built by the daily job (01:30) | next day |
 | "Service temporarily unavailable" / "analytics failed" | backend/MySQL OOM on a 2 GB droplet | ensure **4 GB swap**; resize to 2 vCPU / 4 GB |
+| Admin/user dashboard: "service temporarily unavailable" / "Analytics load failed" on refresh | nginx rate limit hit (dashboards fire 20–30 calls per load) | limits are now 300–600 req/min per client and return **429**; if it recurs check `docker compose logs admin-dashboard` for 429s |
+| No goal notifications | goals are evaluated hourly by `goal_check` (80 % warning, 100 % exceeded, GOAL_MET at period end) | needs `daily_summary` rows — wait for the 30-min backfill after data starts; `docker compose logs backend \| grep goal` |
+| Too many / too few "Unusual usage" alerts | `ANOMALY_*` floors in `.env` (absolute kWh, baseline size, history) | tune and `docker compose restart backend` |
 | Devices "on" but shown offline | online = reported in last 15 min | confirm the RPi/dummy is publishing |
 | Asma's home 0 / offline | her RPi isn't publishing to the droplet | set her `mqtt` to `67.207.68.22:1883` tcp (§4) |
 | `MQTT connect failed (rc=5)` | wrong MQTT user/pass, or `home.id` ≠ MQTT username | check §4 |
