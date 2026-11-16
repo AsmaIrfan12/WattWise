@@ -701,22 +701,26 @@ async def detect_and_notify_anomalies(
 
 async def cleanup_old_notifications(retention_days: int = 90) -> dict:
     """
-    Delete notifications older than `retention_days` so the table doesn't
-    grow forever. Mirrors the MongoDB TTL index that the old system used.
+    Delete notifications older than `retention_days` so the table doesn't grow forever.
 
-    Default retention: 90 days. Returns counts of deleted notifications +
-    user_decisions linked to those notifications (orphaned references are
-    preserved via NULL because the FK uses ON DELETE SET NULL).
+    Alerts that a user responded to are KEPT: the alert text is part of the research
+    record of the decision. (The foreign key is also ON DELETE SET NULL, so even a
+    manual delete can no longer take the decision row with it.)
     """
     from sqlalchemy import delete
-    from app.models import Notification
+    from app.models import Notification, UserDecision
 
     cutoff = datetime.utcnow() - timedelta(days=retention_days)
     logger.info("Cleaning up notifications older than %s (cutoff=%s)", retention_days, cutoff)
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            delete(Notification).where(Notification.created_at < cutoff)
+            delete(Notification).where(
+                Notification.created_at < cutoff,
+                ~Notification.id.in_(
+                    select(UserDecision.notification_id).where(UserDecision.notification_id.isnot(None))
+                ),
+            )
         )
         await db.commit()
         deleted = result.rowcount or 0

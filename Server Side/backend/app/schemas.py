@@ -211,7 +211,7 @@ class DecisionCreate(BaseModel):
 class DecisionResponse(BaseModel):
     id: int
     user_id: int
-    notification_id: int
+    notification_id: Optional[int] = None  # NULL once the alert itself has been pruned
     device_id: Optional[int]
     decision_type: str
     action_taken: Optional[str]

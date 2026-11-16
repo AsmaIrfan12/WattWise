@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import os
 import logging
 import random
 import uuid
@@ -33,6 +34,12 @@ FIXED_DEVICES = {
     ],
 }
 
+# Existing accounts keep their current password unless this is set. Before this flag
+# the seed re-applied the CSV/.env password on every `docker compose up`, silently
+# undoing any password a user or admin had changed.
+RESET_PASSWORDS = os.getenv("SEED_RESET_PASSWORDS", "false").strip().lower() in ("1", "true", "yes")
+
+
 async def upsert_admin(session: AsyncSession):
     """Ensure the system admin account exists and matches .env credentials."""
     email = settings.ADMIN_EMAIL
@@ -47,12 +54,13 @@ async def upsert_admin(session: AsyncSession):
     user = result.scalar_one_or_none()
     
     if user:
-        log.info(f"Updating existing Admin user: {email}")
-        await session.execute(
-            update(User)
-            .where(User.id == user.id)
-            .values(password_hash=hashed, is_admin=True)
-        )
+        # Never overwrite a password that may have been changed since the first
+        # deploy. Set SEED_RESET_PASSWORDS=true to force .env/CSV values back in.
+        values = {"is_admin": True}
+        if RESET_PASSWORDS:
+            values["password_hash"] = hashed
+        log.info(f"Admin user exists: {email} (password {'reset' if RESET_PASSWORDS else 'left unchanged'})")
+        await session.execute(update(User).where(User.id == user.id).values(**values))
     else:
         log.info(f"Creating fresh Admin user: {email}")
         new_admin = User(
@@ -104,12 +112,10 @@ async def seed_db():
             existing_user = result.scalar_one_or_none()
             
             if existing_user:
-                log.info(f"Syncing existing user credentials: {email}")
-                await session.execute(
-                    update(User)
-                    .where(User.id == existing_user.id)
-                    .values(password_hash=hashed_pwd)
-                )
+                if RESET_PASSWORDS:
+                    await session.execute(
+                        update(User).where(User.id == existing_user.id).values(password_hash=hashed_pwd)
+                    )
                 user_id = existing_user.id
             else:
                 log.info(f"Creating fresh user: {email}")
@@ -126,7 +132,9 @@ async def seed_db():
                 inserted_users += 1
 
             # 2. Ensure Home exists (get or create)
-            home_result = await session.execute(select(Home).where(Home.user_id == user_id))
+            home_result = await session.execute(
+                select(Home).where(Home.user_id == user_id).order_by(Home.id).limit(1)
+            )
             home = home_result.scalar_one_or_none()
             
             if not home:
@@ -187,7 +195,10 @@ async def seed_db():
                     inserted_devices += 1
 
         await session.commit()
-        log.info(f"✨ Seed & Sync Complete! Added {inserted_users} new users, synced passwords for all.")
+        log.info(
+            f"✨ Seed complete: {inserted_users} users, {inserted_homes} homes, {inserted_devices} devices added; "
+            f"existing passwords {'RESET from CSV/.env' if RESET_PASSWORDS else 'left unchanged'}."
+        )
 
     # Explicitly dispose the engine so aiomysql connection cleanup
     # happens before asyncio.run() closes the event loop (Python 3.12+).

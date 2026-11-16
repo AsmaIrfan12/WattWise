@@ -68,5 +68,15 @@ async def main() -> int:
     return 0
 
 
+async def _run() -> int:
+    # Dispose the pool before asyncio.run() closes the loop; otherwise aiomysql's
+    # connection finalisers fire afterwards and print "Event loop is closed".
+    from app.database import engine
+    try:
+        return await main()
+    finally:
+        await engine.dispose()
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(_run()))

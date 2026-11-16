@@ -1470,20 +1470,41 @@ async function loadBackups() {
   const el = document.getElementById('backup-list');
   el.innerHTML = '<div class="loading-row">Loading…</div>';
   try {
-    const data = await api('/api/backup/list');
-    const backups = data?.backups || [];
-    if (!backups.length) { el.innerHTML = '<div class="loading-row">No backups yet</div>'; return; }
-    el.innerHTML = backups.map(b => `
-      <div class="backup-entry">
-        <div class="backup-icon">💾</div>
-        <div class="backup-info">
-          <div class="backup-filename">${DOMPurify.sanitize(b.filename)}</div>
-          <div class="backup-meta">${b.size_human || ''} · ${b.created_at ? new Date(b.created_at).toLocaleString('en-GB') : ''}</div>
-        </div>
-        <a href="/api/backup/download/${encodeURIComponent(b.filename)}" class="btn-outline btn-sm">⬇ Download</a>
-      </div>`).join('');
-  } catch (err) { el.innerHTML = `<div class="loading-row">Error loading backups</div>`; }
+    // GET /api/admin/backup/list returns an array of {name, size_mb, created_at}
+    const backups = (await api('/api/admin/backup/list')) || [];
+    if (!backups.length) { el.innerHTML = '<div class="loading-row">No scheduled backups yet (the nightly job writes one every 24 h)</div>'; }
+    else {
+      el.innerHTML = '';
+      backups.forEach(b => {
+        const row = document.createElement('div');
+        row.className = 'backup-entry';
+        row.innerHTML = '<div class="backup-icon">💾</div><div class="backup-info"><div class="backup-filename"></div><div class="backup-meta"></div></div>';
+        row.querySelector('.backup-filename').textContent = b.name;
+        row.querySelector('.backup-meta').textContent =
+          `${b.size_mb} MB · ${b.created_at ? new Date(b.created_at).toLocaleString('en-GB') : ''}`;
+        el.appendChild(row);
+      });
+    }
+  } catch (err) { el.innerHTML = '<div class="loading-row">Error loading backups</div>'; }
   populateExportUsers();
+}
+
+// Streams a fresh mysqldump from GET /api/admin/backup/download and saves it.
+async function downloadFreshBackup() {
+  const res = await fetch(`${API_BASE}/api/admin/backup/download`, { headers: { 'Authorization': `Bearer ${_token}` } });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const name = (res.headers.get('Content-Disposition') || '').match(/filename="?([^"]+)"?/)?.[1] || 'wattwise-backup.sql.gz';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── Participant data export ───────────────────────────────────
@@ -1981,8 +2002,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btn-trigger-backup').addEventListener('click', async () => {
     try {
       toast('Creating backup…', 'info');
-      await api('/api/backup/create', { method: 'POST' });
-      toast('Backup created!', 'success');
+      await downloadFreshBackup();
+      toast('Backup downloaded', 'success');
       loadBackups();
     } catch (err) { toast('Backup failed: ' + err.message, 'error'); }
   });

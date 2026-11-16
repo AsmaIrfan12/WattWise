@@ -1,5 +1,6 @@
 """WattWise — Authentication Router."""
 
+import logging
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -52,6 +53,7 @@ def _create_token(user_id: int, is_admin: bool = False) -> str:
     payload = {
         "sub": str(user_id),
         "is_admin": is_admin,
+        "typ": "access",
         "exp": datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "iat": datetime.utcnow(),
     }
@@ -318,6 +320,7 @@ async def forgot_password(
         reset_payload = {
             "sub": str(user.id),
             "purpose": "password_reset",
+            "typ": "reset",
             "exp": datetime.utcnow() + timedelta(hours=1),
         }
         reset_token = _jwt.encode(reset_payload, settings.SECRET_KEY, algorithm="HS256")

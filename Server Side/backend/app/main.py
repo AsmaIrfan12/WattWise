@@ -382,11 +382,15 @@ async def auth_middleware(request: Request, call_next):
 
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        # Password-reset tokens are signed with the same key; they must never work
+        # as a session. (Tokens issued before "typ" existed have no typ → treated as access.)
+        if payload.get("typ", "access") != "access" or payload.get("purpose") == "password_reset":
+            raise JWTError("not an access token")
         user_id = int(payload["sub"])
         # Read is_admin from JWT claim — avoids extra DB query per request.
         # The claim is embedded at login time; re-login required to reflect changes.
         is_admin = bool(payload.get("is_admin", False))
-    except JWTError:
+    except (JWTError, KeyError, ValueError, TypeError):
         metrics_store.record_auth_failure()
         return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
 

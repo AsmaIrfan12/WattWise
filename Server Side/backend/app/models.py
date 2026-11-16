@@ -275,7 +275,9 @@ class UserDecision(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    notification_id = Column(BigInteger, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False)
+    # Nullable + SET NULL: a decision is research data and must outlive its alert
+    # (notifications are pruned after 90 days). See migrations.m001.
+    notification_id = Column(BigInteger, ForeignKey("notifications.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(Integer, ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
     decision_type = Column(
         Enum("ACCEPTED", "REJECTED", "DEFERRED", "CUSTOM_ACTION"),
@@ -403,6 +405,8 @@ class AdminAuditLog(Base):
             "RESET_PASSWORD", "BULK_OPERATION", "EDIT_USER",
             "RUN_CLASSIFIER", "EXPORT_DATA", "BACKUP_TRIGGERED",
             "TRIGGER_SMART_NOTIFICATIONS", "LOGIN",
+            "UPDATE_USER_BUDGET", "SIMULATE_DECISIONS", "PROVISION_HOME",
+            "ROTATE_CREDENTIALS", "DELETE_DEVICE",
         ),
         nullable=False,
     )
