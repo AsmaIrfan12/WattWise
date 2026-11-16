@@ -34,6 +34,8 @@ class TokenResponse(BaseModel):
     is_admin: bool
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     email: str
@@ -43,6 +45,10 @@ class UserResponse(BaseModel):
     weekly_energy_goal_kwh: Optional[float]
     monthly_budget_gbp: Optional[float]
     created_at: datetime
+    persona_id: Optional[int] = None
+    persona_name: Optional[str] = None
+    last_login_at: Optional[datetime] = None
+    is_synthetic: bool = False
 
 
 # ── Homes ─────────────────────────────────────────────────────
@@ -173,12 +179,36 @@ class GoalProgressResponse(BaseModel):
 
 # ── Notifications ─────────────────────────────────────────────
 
+class DecisionBrief(BaseModel):
+    """The user's response to an alert, embedded in the alert itself."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    decision_type: str
+    action_taken: Optional[str] = None
+    user_feedback_text: Optional[str] = None
+    user_satisfaction: Optional[int] = None
+    action_timestamp: Optional[datetime] = None
+    remind_at: Optional[datetime] = None
+    energy_saved_kwh: Optional[float] = None
+    cost_saved_gbp: Optional[float] = None
+    effectiveness_score: Optional[float] = None
+    impact_scope: Optional[str] = None
+    impact_calculated_at: Optional[datetime] = None
+
+
 class NotificationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     user_id: int
+    home_id: Optional[int] = None
     device_id: Optional[int]
+    device_name: Optional[str] = None
+    appliance_key: Optional[str] = None
     notification_type: str
     severity: str
+    source: str = "AUTOMATED"
     title: str
     message: str
     action_hint: Optional[str]
@@ -186,9 +216,14 @@ class NotificationResponse(BaseModel):
     requires_user_action: bool
     metadata_json: Optional[dict]
     is_read: bool
+    read_at: Optional[datetime] = None
+    opened_at: Optional[datetime] = None
     dismissed: bool
     sent_via_push: bool
+    expires_at: Optional[datetime] = None
+    is_expired: bool = False
     created_at: datetime
+    decision: Optional[DecisionBrief] = None
 
 class NotificationStatsResponse(BaseModel):
     total: int
@@ -204,9 +239,33 @@ class DecisionCreate(BaseModel):
     notification_id: int
     device_id: Optional[int] = None
     decision_type: str = Field(..., pattern="^(ACCEPTED|REJECTED|DEFERRED|CUSTOM_ACTION)$")
-    action_taken: Optional[str] = None
-    user_feedback_text: Optional[str] = None
+    action_taken: Optional[str] = Field(default=None, max_length=500)
+    user_feedback_text: Optional[str] = Field(default=None, max_length=2000)
     user_satisfaction: Optional[int] = Field(default=None, ge=1, le=5)
+    # DEFERRED only: re-surface the alert after this many minutes (default 120).
+    remind_in_minutes: Optional[int] = Field(default=None, ge=5, le=7 * 24 * 60)
+
+
+class DecisionUpdate(BaseModel):
+    """Change a recorded decision: complete a deferred alert, or add what was done / feedback."""
+    decision_type: Optional[str] = Field(default=None, pattern="^(ACCEPTED|REJECTED|DEFERRED|CUSTOM_ACTION)$")
+    action_taken: Optional[str] = Field(default=None, max_length=500)
+    user_feedback_text: Optional[str] = Field(default=None, max_length=2000)
+    user_satisfaction: Optional[int] = Field(default=None, ge=1, le=5)
+    remind_in_minutes: Optional[int] = Field(default=None, ge=5, le=7 * 24 * 60)
+
+
+class InteractionCreate(BaseModel):
+    """A client-side event (app open, screen view…) for behavioural analytics."""
+    interaction_type: str = Field(
+        ...,
+        pattern="^(APP_OPEN|APP_CLOSE|LOGOUT|VIEW_DASHBOARD|VIEW_DEVICE|VIEW_RANKING|VIEW_REPORT|CHANGE_SETTINGS)$",
+    )
+    screen_name: Optional[str] = Field(default=None, max_length=128)
+    device_id: Optional[int] = None
+    notification_id: Optional[int] = None
+    session_id: Optional[str] = Field(default=None, max_length=64)
+    metadata: Optional[dict] = None
 
 class DecisionResponse(BaseModel):
     id: int
@@ -223,8 +282,16 @@ class DecisionResponse(BaseModel):
     response_time_seconds: Optional[int]
     effectiveness_score: Optional[float]
     user_satisfaction: Optional[int]
+    user_feedback_text: Optional[str] = None
     impact_calculated_at: Optional[datetime]
+    impact_scope: Optional[str] = None
+    remind_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     created_at: datetime
+    # Filled by the list endpoint so history can show what the decision was about.
+    notification_title: Optional[str] = None
+    notification_type: Optional[str] = None
+    device_name: Optional[str] = None
 
 class DecisionImpactReport(BaseModel):
     total_decisions: int
@@ -260,15 +327,26 @@ class RankingResponse(BaseModel):
 # ── Admin ─────────────────────────────────────────────────────
 
 class AdminNotificationSend(BaseModel):
-    user_ids: Optional[List[int]] = None   # None = broadcast to all
-    target_persona_id: Optional[int] = None  # restrict to users in this persona
-    title: str
-    message: str
-    notification_type: str = "ADMIN_BROADCAST"
-    severity: str = "INFO"
-    action_hint: Optional[str] = None
-    action_button_text: Optional[str] = None
+    # Targeting precedence: user_ids > home_ids > target_persona_id > everyone in `cohort`.
+    user_ids: Optional[List[int]] = None
+    home_ids: Optional[List[int]] = None
+    target_persona_id: Optional[int] = None
+    cohort: str = Field(default="all", pattern="^(real|synthetic|all)$")
+    title: str = Field(..., min_length=1, max_length=256)
+    message: str = Field(..., min_length=1, max_length=4000)
+    notification_type: str = Field(
+        default="ADMIN_BROADCAST",
+        pattern="^(ADMIN_BROADCAST|ENERGY_ALERT|GOAL_WARNING|PEAK_TARIFF_REMINDER|RECOMMENDATION|ACHIEVEMENT)$",
+    )
+    severity: str = Field(default="INFO", pattern="^(INFO|WARNING|ALERT|CRITICAL)$")
+    action_hint: Optional[str] = Field(default=None, max_length=256)
+    action_button_text: Optional[str] = Field(default=None, max_length=64)
     requires_user_action: bool = False
+    # Attach the alert to one device of each targeted home (by appliance), so the
+    # energy impact of the user's response can be measured on that device.
+    appliance_key: Optional[str] = Field(default=None, max_length=64)
+    # Leave empty to send now; a future time schedules the campaign.
+    send_at: Optional[datetime] = None
 
 class AdminTemplateCreate(BaseModel):
     name: str

@@ -23,13 +23,14 @@ from app.scheduler import (
     send_peak_reminder, send_daily_report,
     calculate_decision_impacts, compute_rankings,
     cleanup_old_notifications, detect_and_notify_anomalies,
-    backfill_recent,
+    backfill_recent, send_decision_reminders, dispatch_scheduled_campaigns,
 )
 from app.email_report import send_weekly_reports
 from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 from app.routers import advanced
 from app.routers import influx, environment, smart_notifications
+from app.routers import interactions, admin_decisions
 
 
 def _configure_logging():
@@ -167,6 +168,14 @@ async def _job_smart_device_check():
         await NotificationEngine.check_device_scenario_notifications(db)
 
 
+async def _job_decision_reminders():
+    await _run_tracked_job("decision_reminders", send_decision_reminders)
+
+
+async def _job_scheduled_campaigns():
+    await _run_tracked_job("scheduled_campaigns", dispatch_scheduled_campaigns)
+
+
 async def _job_notification_cleanup():
     """Daily TTL cleanup — delete notifications older than 90 days."""
     await _run_tracked_job("notification_cleanup", lambda: cleanup_old_notifications(retention_days=90))
@@ -256,6 +265,8 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_job_anomaly_scan,        "interval",   hours=1,                     id="anomaly_scan")
         # Self-healing aggregation so dashboards are never empty: heal 24 h every 30 min.
         scheduler.add_job(_job_backfill_recent,    "interval",   minutes=30,                  id="backfill_recent")
+        scheduler.add_job(_job_decision_reminders, "interval",   minutes=5,                   id="decision_reminders")
+        scheduler.add_job(_job_scheduled_campaigns,"interval",   minutes=1,                   id="scheduled_campaigns")
         scheduler.start()
         logger.info("✅ This worker owns the scheduler — 14 jobs started (personas every 6 h; self-healing backfill)")
 
@@ -414,6 +425,8 @@ app.include_router(advanced.router)
 app.include_router(influx.router)
 app.include_router(environment.router)
 app.include_router(smart_notifications.router)
+app.include_router(interactions.router)
+app.include_router(admin_decisions.router)
 
 
 # ── Health ────────────────────────────────────────────────────

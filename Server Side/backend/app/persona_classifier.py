@@ -223,18 +223,20 @@ async def _extract_features(db: AsyncSession, user: User, cutoff_30d, inactive_c
         select(
             func.count(UserDecision.id).label("total"),
             func.sum(
-                case((UserDecision.decision_type == "ACCEPTED", 1), else_=0)
+                case((UserDecision.decision_type.in_(("ACCEPTED", "CUSTOM_ACTION")), 1), else_=0)
             ).label("accepted"),
             func.avg(UserDecision.response_time_seconds).label("avg_latency"),
         ).where(
             UserDecision.user_id == user.id,
             UserDecision.created_at >= datetime.combine(cutoff_30d, datetime.min.time()),
+            # Simulated demo decisions describe behaviour only for synthetic users.
+            *([] if getattr(user, "is_synthetic", False) else [UserDecision.is_simulated.is_(False)]),
         )
     )).one()
     total_dec = int(dec_row.total or 0)
     accepted_dec = int(dec_row.accepted or 0)
     decision_acceptance = (accepted_dec / total_dec) if total_dec > 0 else 0.0
-    response_latency_log = math.log1p(float(dec_row.avg_latency or 0.0))
+    response_latency_log = response_latency_feature(dec_row.avg_latency)
 
     efficiency_trend = await _efficiency_trend_slope(db, user.id, cutoff_30d)
 
@@ -250,6 +252,19 @@ async def _extract_features(db: AsyncSession, user: User, cutoff_30d, inactive_c
         "ranking_days": days,
     }
     return (features, True)
+
+
+# A user who never responds must not look like the fastest responder. With no
+# decisions the latency feature takes the alert lifetime (48 h): "did not respond
+# before the alert expired".
+NO_RESPONSE_LATENCY_SECONDS = 48 * 3600
+
+
+def response_latency_feature(avg_latency_seconds) -> float:
+    """log1p of the mean response time; never-responded → the 48 h ceiling, not 0."""
+    if avg_latency_seconds is None:
+        return math.log1p(NO_RESPONSE_LATENCY_SECONDS)
+    return math.log1p(max(float(avg_latency_seconds), 0.0))
 
 
 async def _efficiency_trend_slope(db: AsyncSession, user_id: int, cutoff_30d) -> float:

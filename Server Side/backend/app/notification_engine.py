@@ -21,12 +21,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import User, Notification, Device, Home, DailySummary, HomeDailyTotal, EnergyGoal
+from app.models import (
+    User, Notification, Device, Home, DailySummary, HomeDailyTotal, EnergyGoal, NotificationCampaign,
+)
 
 logger = logging.getLogger("notification_engine")
 
 # Deduplication window: don't send same notification type to same user within this period
 DEDUP_WINDOW_HOURS = 12
+
+
+def default_dedup_key(notification_type: str, device_id: Optional[int]) -> str:
+    """One alert of a given type per device (or per home-level slot) per dedup window."""
+    return f"{notification_type}:{device_id if device_id is not None else 'home'}"
 
 
 class NotificationEngine:
@@ -49,24 +56,45 @@ class NotificationEngine:
         metadata: Optional[dict] = None,
         expires_hours: int = 48,
         send_push: bool = True,
+        source: str = "AUTOMATED",
+        rule_key: Optional[str] = None,
+        campaign_id: Optional[int] = None,
+        dedup_key: Optional[str] = None,
+        dedup: bool = True,
     ) -> Optional[Notification]:
         """
         Create a notification record and optionally deliver via push.
-        Includes deduplication to prevent notification spam.
+
+        Deduplication (dedup=True): at most one notification per user per `dedup_key`
+        within DEDUP_WINDOW_HOURS. The default key is "<type>:<device_id>", i.e. the
+        historical behaviour. Callers that have their own idempotency (goal
+        milestones) or must never be dropped (admin sends) pass dedup=False.
+        Returns None when the notification was suppressed as a duplicate.
         """
-        # Deduplication check
-        dedup_since = datetime.utcnow() - timedelta(hours=DEDUP_WINDOW_HOURS)
-        existing = await db.execute(
-            select(Notification).where(
-                Notification.user_id == user_id,
-                Notification.notification_type == notification_type,
-                Notification.device_id == device_id,
-                Notification.created_at >= dedup_since
-            ).limit(1)
-        )
-        if existing.scalar_one_or_none():
-            logger.debug(f"Skipping duplicate {notification_type} for user {user_id}")
-            return None
+        dedup_key = dedup_key or default_dedup_key(notification_type, device_id)
+        if dedup:
+            dedup_since = datetime.utcnow() - timedelta(hours=DEDUP_WINDOW_HOURS)
+            duplicate = (await db.execute(
+                select(Notification.id).where(
+                    Notification.user_id == user_id,
+                    Notification.dedup_key == dedup_key,
+                    Notification.created_at >= dedup_since,
+                ).limit(1)
+            )).scalar_one_or_none()
+            if duplicate is None:
+                # Rows created before dedup_key existed: fall back to the old match.
+                duplicate = (await db.execute(
+                    select(Notification.id).where(
+                        Notification.user_id == user_id,
+                        Notification.dedup_key.is_(None),
+                        Notification.notification_type == notification_type,
+                        Notification.device_id == device_id,
+                        Notification.created_at >= dedup_since,
+                    ).limit(1)
+                )).scalar_one_or_none()
+            if duplicate is not None:
+                logger.debug(f"Skipping duplicate {dedup_key} for user {user_id}")
+                return None
 
         # Create notification record
         notif = Notification(
@@ -82,6 +110,10 @@ class NotificationEngine:
             requires_user_action=requires_user_action,
             metadata_json=metadata,
             expires_at=datetime.utcnow() + timedelta(hours=expires_hours),
+            source=source,
+            rule_key=rule_key,
+            campaign_id=campaign_id,
+            dedup_key=dedup_key,
         )
         db.add(notif)
         await db.commit()
@@ -239,6 +271,7 @@ class NotificationEngine:
                             notification_type="GOAL_WARNING",
                             severity="WARNING",
                             home_id=home.id,
+                            rule_key="daily_ceiling", dedup_key=f"daily_ceiling:{home.id}:reached",
                             action_hint="Consider turning off non-essential devices",
                             action_button_text="View Usage",
                             requires_user_action=True,
@@ -251,6 +284,7 @@ class NotificationEngine:
                             notification_type="ENERGY_ALERT",
                             severity="ALERT",
                             home_id=home.id,
+                            rule_key="daily_ceiling", dedup_key=f"daily_ceiling:{home.id}:exceeded",
                             action_hint="Turn off high-consumption appliances",
                             action_button_text="Take Action",
                             requires_user_action=True,
@@ -332,6 +366,7 @@ class NotificationEngine:
                     action_button_text="View Goal",
                     requires_user_action=True,
                     metadata={**base_meta, "milestone": "exceeded"},
+                    rule_key="goal_exceeded", dedup_key=f"goal:{goal.id}:exceeded:{period_start}", dedup=False,
                 )
         elif pct >= settings.GOAL_WARNING_PERCENT:
             if not await NotificationEngine._goal_milestone_already_sent(db, user.id, goal.id, "warning", period_start):
@@ -350,6 +385,7 @@ class NotificationEngine:
                     action_button_text="View Goal",
                     requires_user_action=True,
                     metadata={**base_meta, "milestone": "warning"},
+                    rule_key="goal_warning", dedup_key=f"goal:{goal.id}:warning:{period_start}", dedup=False,
                 )
 
         # Did the previous period finish under target? Celebrate once, within 2 days of it ending.
@@ -368,6 +404,7 @@ class NotificationEngine:
                     severity="INFO",
                     device_id=goal.device_id,
                     action_button_text="View Goals",
+                    rule_key="goal_met", dedup_key=f"goal:{goal.id}:met:{prev[0]}", dedup=False,
                     metadata={
                         "goal_id": goal.id, "device_id": goal.device_id,
                         "period_start": str(prev[0]), "period_end": str(prev[1]),
@@ -440,6 +477,100 @@ class NotificationEngine:
     # ── Admin Broadcast ───────────────────────────────────────
 
     @staticmethod
+    async def resolve_campaign_recipients(
+        db: AsyncSession,
+        user_ids: Optional[list[int]] = None,
+        home_ids: Optional[list[int]] = None,
+        target_persona_id: Optional[int] = None,
+        cohort: str = "all",
+    ) -> list[User]:
+        """
+        Who an admin send goes to. Precedence: user_ids > home_ids > persona > everyone.
+        Admin accounts never receive campaigns. `cohort` narrows persona/everyone sends
+        to real or synthetic users.
+        """
+        q = select(User).where(User.is_admin.is_(False))
+        if user_ids:
+            q = q.where(User.id.in_(user_ids))
+        elif home_ids:
+            q = q.where(User.id.in_(select(Home.user_id).where(Home.id.in_(home_ids))))
+        else:
+            if target_persona_id is not None:
+                q = q.where(User.persona_id == target_persona_id)
+            if cohort == "real":
+                q = q.where(User.is_synthetic.is_(False))
+            elif cohort == "synthetic":
+                q = q.where(User.is_synthetic.is_(True))
+        return list((await db.execute(q)).scalars().all())
+
+    @staticmethod
+    async def send_campaign(db: AsyncSession, campaign: NotificationCampaign) -> int:
+        """
+        Deliver a campaign: one notification per recipient, never deduplicated (an admin
+        send must arrive), tagged with the campaign so responses can be traced back.
+        Returns the number of notifications actually created.
+        """
+        target = campaign.target_json or {}
+        users = await NotificationEngine.resolve_campaign_recipients(
+            db,
+            user_ids=target.get("user_ids"),
+            home_ids=target.get("home_ids"),
+            target_persona_id=target.get("target_persona_id"),
+            cohort=target.get("cohort", "all"),
+        )
+        appliance_key = target.get("appliance_key")
+        home_filter = target.get("home_ids")
+
+        created = 0
+        for user in users:
+            homes_q = select(Home).where(Home.user_id == user.id, Home.is_active.is_(True)).order_by(Home.id)
+            if home_filter:
+                homes_q = homes_q.where(Home.id.in_(home_filter))
+            home = (await db.execute(homes_q.limit(1))).scalar_one_or_none()
+
+            # Attach a device so the response's energy impact is measurable on it.
+            device_id = None
+            if appliance_key and home:
+                device_id = (await db.execute(
+                    select(Device.id).where(
+                        Device.home_id == home.id, Device.appliance_key == appliance_key, Device.is_active.is_(True)
+                    ).order_by(Device.id).limit(1)
+                )).scalar_one_or_none()
+                if device_id is None:
+                    continue  # this home has no such appliance — the alert would not apply
+
+            notif = await NotificationEngine.create_notification(
+                db, user.id,
+                title=campaign.title,
+                message=campaign.message,
+                notification_type=campaign.notification_type,
+                severity=campaign.severity,
+                home_id=home.id if home else None,
+                device_id=device_id,
+                action_hint=campaign.action_hint,
+                action_button_text=campaign.action_button_text,
+                requires_user_action=campaign.requires_user_action,
+                metadata={"campaign_id": campaign.id},
+                expires_hours=7 * 24,
+                send_push=True,
+                source="ADMIN",
+                rule_key="admin_campaign",
+                campaign_id=campaign.id,
+                dedup_key=f"campaign:{campaign.id}",
+                dedup=False,
+            )
+            if notif:
+                created += 1
+
+        campaign.status = "SENT"
+        campaign.sent_at = datetime.utcnow()
+        campaign.recipients_targeted = len(users)
+        campaign.notifications_created = created
+        await db.commit()
+        logger.info("Campaign %s '%s': %d targeted, %d created", campaign.id, campaign.title, len(users), created)
+        return created
+
+    @staticmethod
     async def admin_broadcast(
         db: AsyncSession,
         title: str,
@@ -451,59 +582,60 @@ class NotificationEngine:
         requires_user_action: bool = False,
         user_ids: Optional[list[int]] = None,
         target_persona_id: Optional[int] = None,
-    ) -> int:
+        home_ids: Optional[list[int]] = None,
+        cohort: str = "all",
+        appliance_key: Optional[str] = None,
+        send_at: Optional[datetime] = None,
+        created_by: Optional[int] = None,
+    ) -> NotificationCampaign:
         """
-        Send a notification from admin to a target audience.
-
-        Targeting precedence:
-          1. user_ids — explicit list of user IDs
-          2. target_persona_id — only users currently classified into that persona
-          3. (default) — all non-admin users
-
-        Returns the count of notifications created.
+        Record an admin send as a campaign and deliver it (or leave it SCHEDULED when
+        send_at is in the future — the scheduler's campaign job delivers it then).
+        Returns the campaign; `notifications_created` is the true number delivered.
         """
-        if user_ids:
-            users_result = await db.execute(select(User).where(User.id.in_(user_ids)))
-        elif target_persona_id is not None:
-            users_result = await db.execute(
-                select(User).where(
-                    User.is_admin.is_(False),
-                    User.persona_id == target_persona_id,
-                )
-            )
-        else:
-            users_result = await db.execute(select(User).where(User.is_admin == False))
+        scheduled = bool(send_at and send_at > datetime.utcnow() + timedelta(seconds=30))
+        campaign = NotificationCampaign(
+            created_by=created_by,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            severity=severity,
+            requires_user_action=requires_user_action,
+            action_hint=action_hint,
+            action_button_text=action_button_text,
+            target_json={
+                "user_ids": user_ids or None,
+                "home_ids": home_ids or None,
+                "target_persona_id": target_persona_id,
+                "cohort": cohort,
+                "appliance_key": appliance_key or None,
+            },
+            status="SCHEDULED" if scheduled else "SENT",
+            send_at=send_at if scheduled else None,
+        )
+        db.add(campaign)
+        await db.commit()
+        await db.refresh(campaign)
+        if not scheduled:
+            await NotificationEngine.send_campaign(db, campaign)
+            await db.refresh(campaign)
+        return campaign
 
-        users = users_result.scalars().all()
-        count = 0
-
-        for user in users:
-            notif = await db.execute(
-                select(Notification).where(
-                    Notification.user_id == user.id,
-                    Notification.notification_type == notification_type,
-                    Notification.title == title,
-                    Notification.created_at >= datetime.utcnow() - timedelta(hours=1)
-                ).limit(1)
-            )
-            if notif.scalar_one_or_none():
-                continue  # Don't spam identical admin notifications
-
-            await NotificationEngine.create_notification(
-                db, user.id,
-                title=title,
-                message=message,
-                notification_type=notification_type,
-                severity=severity,
-                action_hint=action_hint,
-                action_button_text=action_button_text,
-                requires_user_action=requires_user_action,
-                send_push=True,
-            )
-            count += 1
-
-        logger.info(f"Admin broadcast '{title}' sent to {count} users")
-        return count
+    @staticmethod
+    async def dispatch_due_campaigns(db: AsyncSession) -> int:
+        """Send every SCHEDULED campaign whose send_at has passed. Called every minute."""
+        due = (await db.execute(
+            select(NotificationCampaign).where(
+                NotificationCampaign.status == "SCHEDULED",
+                NotificationCampaign.send_at <= datetime.utcnow(),
+            ).order_by(NotificationCampaign.send_at)
+        )).scalars().all()
+        for campaign in due:
+            try:
+                await NotificationEngine.send_campaign(db, campaign)
+            except Exception as e:
+                logger.error("Scheduled campaign %s failed: %s", campaign.id, e)
+        return len(due)
 
     # ── Smart Device Scenario Notifications ───────────────────
 

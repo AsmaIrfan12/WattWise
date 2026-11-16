@@ -7,9 +7,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import EnergyGoal, DailySummary, HomeDailyTotal, Home, UserInteractionLog
+from app.models import EnergyGoal, HomeDailyTotal, Home, UserInteractionLog
 from app.schemas import GoalCreate, GoalResponse, GoalProgressResponse
-from app.energy_analysis import EnergyAnalysisEngine
 from app.goal_tracker import evaluate_goal
 
 router = APIRouter(prefix="/api/goals", tags=["Energy Goals"])

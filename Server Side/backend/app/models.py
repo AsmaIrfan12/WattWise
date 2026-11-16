@@ -43,6 +43,8 @@ class User(Base):
     daily_energy_goal_kwh = Column(Float, nullable=True)
     weekly_energy_goal_kwh = Column(Float, nullable=True)
     monthly_budget_gbp = Column(Float, nullable=True)
+    # True for demo accounts fed by dummy_data_sender.py — excluded from research analytics.
+    is_synthetic = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login_at = Column(DateTime, nullable=True)
 
@@ -258,6 +260,14 @@ class Notification(Base):
     push_receipt_id = Column(String(256), nullable=True)
     sent_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    # Provenance: which rule (AUTOMATED) or which admin campaign (ADMIN) produced this alert.
+    source = Column(Enum("AUTOMATED", "ADMIN"), default="AUTOMATED", nullable=False)
+    rule_key = Column(String(64), nullable=True)
+    campaign_id = Column(BigInteger, ForeignKey("notification_campaigns.id", ondelete="SET NULL"), nullable=True)
+    # Set once, the first time the user explicitly opens the alert (≠ is_read, which
+    # only means the alert was listed on screen).
+    opened_at = Column(DateTime, nullable=True)
+    dedup_key = Column(String(160), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="notifications")
@@ -296,14 +306,50 @@ class UserDecision(Base):
     user_feedback_text = Column(Text, nullable=True)
     user_satisfaction = Column(SmallInteger, nullable=True)
     impact_calculated_at = Column(DateTime, nullable=True)
+    # True for rows written by the admin decision simulator — never real behaviour.
+    is_simulated = Column(Boolean, default=False, nullable=False)
+    updated_at = Column(DateTime, nullable=True)
+    # "Later": when to re-surface the alert, and when that reminder was sent.
+    remind_at = Column(DateTime, nullable=True)
+    reminded_at = Column(DateTime, nullable=True)
+    # What the before/after energy window was measured on.
+    impact_scope = Column(Enum("device", "home", "none"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="decisions")
     notification = relationship("Notification", back_populates="decision")
 
     __table_args__ = (
+        UniqueConstraint("user_id", "notification_id", name="uq_decision_user_notification"),
         Index("idx_decisions_user", "user_id", "created_at"),
     )
+
+
+# ── ADMIN CAMPAIGNS (one row per admin send) ──────────────────
+class NotificationCampaign(Base):
+    """
+    Every manual admin send. Notifications created by it carry campaign_id, so the
+    admin can see, per send, who opened it and what each recipient decided.
+    Created by migrations.m003 (kept out of create_all's hands by existing first).
+    """
+    __tablename__ = "notification_campaigns"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(256), nullable=False)
+    message = Column(Text, nullable=False)
+    notification_type = Column(String(32), default="ADMIN_BROADCAST", nullable=False)
+    severity = Column(String(16), default="INFO", nullable=False)
+    requires_user_action = Column(Boolean, default=False, nullable=False)
+    action_hint = Column(String(256), nullable=True)
+    action_button_text = Column(String(64), nullable=True)
+    target_json = Column(JSON, nullable=True)
+    status = Column(Enum("SCHEDULED", "SENT", "CANCELLED"), default="SENT", nullable=False)
+    send_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    recipients_targeted = Column(Integer, default=0, nullable=False)
+    notifications_created = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # ── USER INTERACTION LOG ──────────────────────────────────────

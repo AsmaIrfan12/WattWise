@@ -24,6 +24,7 @@ from app.schemas import (
 from app.notification_engine import NotificationEngine
 from app.decision_tracker import DecisionTracker
 from app.config import settings
+from app.cohorts import normalise_cohort, apply_user_cohort
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -124,18 +125,25 @@ async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     request: Request, db: AsyncSession = Depends(get_db),
-    page: int = 1, limit: int = 50,
+    page: int = Query(default=1, ge=1), limit: int = Query(default=50, ge=1, le=500),
     persona_id: Optional[int] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    cohort: str = Query(default="all"),
 ):
     _require_admin(request)
-    q = select(User).where(User.is_admin == False)
+    q = select(User, Persona.name).outerjoin(Persona, Persona.id == User.persona_id).where(User.is_admin == False)
+    q = apply_user_cohort(q, normalise_cohort(cohort))
     if persona_id is not None:
         q = q.where(User.persona_id == persona_id)
     if search:
         q = q.where(User.name.ilike(f"%{search}%") | User.email.ilike(f"%{search}%"))
-    result = await db.execute(q.offset((page - 1) * limit).limit(limit))
-    return result.scalars().all()
+    rows = (await db.execute(q.order_by(User.is_synthetic, User.name).offset((page - 1) * limit).limit(limit))).all()
+    out = []
+    for user, persona_name in rows:
+        resp = UserResponse.model_validate(user)
+        resp.persona_name = persona_name
+        out.append(resp)
+    return out
 
 
 @router.get("/users/{user_id}/details")
@@ -148,13 +156,27 @@ async def get_user_details(user_id: int, request: Request, db: AsyncSession = De
 
     homes_result = await db.execute(select(Home).where(Home.user_id == user_id))
     homes = homes_result.scalars().all()
-    impact = await DecisionTracker.get_user_impact_report(db, user_id)
+    # Synthetic users only ever have simulated decisions; show those for them.
+    impact = await DecisionTracker.get_user_impact_report(db, user_id, include_simulated=bool(user.is_synthetic))
 
-    notifs_result = await db.execute(
-        select(Notification).where(Notification.user_id == user_id)
-        .order_by(Notification.created_at.desc()).limit(10)
+    devices_by_home: dict[int, list] = {}
+    if homes:
+        dev_rows = await db.execute(
+            select(Device).where(Device.home_id.in_([h.id for h in homes])).order_by(Device.name)
+        )
+        for dev in dev_rows.scalars().all():
+            devices_by_home.setdefault(dev.home_id, []).append({
+                "id": dev.id, "name": dev.name, "appliance_key": dev.appliance_key,
+                "entity_id": dev.entity_id, "is_active": dev.is_active,
+            })
+
+    notif_rows = await db.execute(
+        select(Notification, UserDecision)
+        .outerjoin(UserDecision, UserDecision.notification_id == Notification.id)
+        .where(Notification.user_id == user_id)
+        .order_by(Notification.created_at.desc()).limit(25)
     )
-    notifs = notifs_result.scalars().all()
+    notif_rows = notif_rows.all()
 
     persona_name = None
     if user.persona_id:
@@ -176,6 +198,7 @@ async def get_user_details(user_id: int, request: Request, db: AsyncSession = De
         "user": {
             "id": user.id, "name": user.name, "email": user.email,
             "created_at": user.created_at, "last_login": user.last_login_at,
+            "is_synthetic": bool(user.is_synthetic),
             "push_token_set": bool(user.push_token),
             "notifications_enabled": user.notifications_enabled,
             "persona": persona_name, "persona_id": user.persona_id,
@@ -184,11 +207,22 @@ async def get_user_details(user_id: int, request: Request, db: AsyncSession = De
             "monthly_budget_gbp": user.monthly_budget_gbp,
         },
         "homes": [{"id": h.id, "name": h.home_name, "home_type": h.home_type,
-                   "num_occupants": h.num_occupants, "is_active": h.is_active} for h in homes],
+                   "num_occupants": h.num_occupants, "is_active": h.is_active,
+                   "devices": devices_by_home.get(h.id, [])} for h in homes],
         "decision_impact": impact,
         "energy_timeline_7d": energy_timeline,
-        "recent_notifications": [{"id": n.id, "type": n.notification_type, "title": n.title,
-                                   "read": n.is_read, "created_at": n.created_at} for n in notifs],
+        "recent_notifications": [{
+            "id": n.id, "type": n.notification_type, "source": n.source, "severity": n.severity,
+            "title": n.title, "requires_user_action": n.requires_user_action,
+            "read": n.is_read, "opened_at": n.opened_at, "created_at": n.created_at,
+            "decision": None if d is None else {
+                "id": d.id, "decision_type": d.decision_type, "action_taken": d.action_taken,
+                "user_feedback_text": d.user_feedback_text, "user_satisfaction": d.user_satisfaction,
+                "decided_at": d.action_timestamp, "response_time_seconds": d.response_time_seconds,
+                "energy_saved_kwh": d.energy_saved_kwh, "effectiveness_score": d.effectiveness_score,
+                "is_simulated": d.is_simulated,
+            },
+        } for n, d in notif_rows],
     }
 
 
@@ -298,6 +332,19 @@ async def bulk_operation(
         raise HTTPException(status_code=400, detail="No user IDs provided")
 
     affected = 0
+    if operation == "send_notification":
+        if not (notification_title and notification_message):
+            raise HTTPException(status_code=422, detail="notification_title and notification_message are required")
+        campaign = await NotificationEngine.admin_broadcast(
+            db=db, title=notification_title, message=notification_message,
+            notification_type="ADMIN_BROADCAST", severity="INFO", user_ids=user_ids, created_by=admin_id,
+        )
+        await _log_audit(db, admin_id, "BULK_OPERATION",
+                         details={"operation": operation, "user_ids": user_ids,
+                                  "affected": campaign.notifications_created, "campaign_id": campaign.id},
+                         ip_address=request.client.host if request.client else None)
+        return {"operation": operation, "affected": campaign.notifications_created, "campaign_id": campaign.id}
+
     for uid in user_ids:
         res = await db.execute(select(User).where(User.id == uid))
         user = res.scalar_one_or_none()
@@ -311,12 +358,6 @@ async def bulk_operation(
             affected += 1
         elif operation == "assign_persona" and persona_id:
             user.persona_id = persona_id
-            affected += 1
-        elif operation == "send_notification" and notification_title and notification_message:
-            await NotificationEngine.admin_broadcast(
-                db=db, title=notification_title, message=notification_message,
-                notification_type="ADMIN_BROADCAST", severity="INFO", user_ids=[uid],
-            )
             affected += 1
 
     await db.commit()
@@ -408,25 +449,41 @@ async def run_persona_classifier(request: Request, db: AsyncSession = Depends(ge
 
 @router.post("/notifications/send")
 async def send_notification(body: AdminNotificationSend, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Send (or schedule) a manual alert. Every send is recorded as a campaign, so the
+    Decisions tab can show who opened it and how each recipient responded.
+    """
     admin_id = _require_admin(request)
-    count = await NotificationEngine.admin_broadcast(
+    campaign = await NotificationEngine.admin_broadcast(
         db=db, title=body.title, message=body.message,
         notification_type=body.notification_type, severity=body.severity,
         action_hint=body.action_hint, action_button_text=body.action_button_text,
         requires_user_action=body.requires_user_action,
-        user_ids=body.user_ids,
-        target_persona_id=body.target_persona_id,
+        user_ids=body.user_ids, home_ids=body.home_ids,
+        target_persona_id=body.target_persona_id, cohort=body.cohort,
+        appliance_key=body.appliance_key, send_at=body.send_at, created_by=admin_id,
     )
-    audit_details = {
-        "title": body.title,
-        "recipients": count,
-        "user_ids": body.user_ids,
+    await _log_audit(db, admin_id, "SEND_NOTIFICATION",
+                     details={
+                         "campaign_id": campaign.id, "title": body.title, "status": campaign.status,
+                         "recipients_targeted": campaign.recipients_targeted,
+                         "notifications_created": campaign.notifications_created,
+                         "user_ids": body.user_ids, "home_ids": body.home_ids,
+                         "target_persona_id": body.target_persona_id, "cohort": body.cohort,
+                         "requires_user_action": body.requires_user_action,
+                     },
+                     ip_address=request.client.host if request.client else None)
+    return {
+        "success": True,
+        "campaign_id": campaign.id,
+        "status": campaign.status,
+        "send_at": campaign.send_at,
+        "recipients_targeted": campaign.recipients_targeted,
+        # True number of alerts created (kept under the old key too for older clients).
+        "notifications_created": campaign.notifications_created,
+        "notifications_sent": campaign.notifications_created,
         "target_persona_id": body.target_persona_id,
     }
-    await _log_audit(db, admin_id, "SEND_NOTIFICATION",
-                     details=audit_details,
-                     ip_address=request.client.host if request.client else None)
-    return {"success": True, "notifications_sent": count, "target_persona_id": body.target_persona_id}
 
 
 @router.get("/notifications/templates")
@@ -648,9 +705,12 @@ async def get_personas_history(
 # ── Analytics ─────────────────────────────────────────────────
 
 @router.get("/analytics/decisions")
-async def get_decision_analytics(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_decision_analytics(
+    request: Request, db: AsyncSession = Depends(get_db), cohort: str = Query(default="real"),
+):
+    """Decision impact totals for one cohort (real by default — simulated rows never count as real)."""
     _require_admin(request)
-    return await DecisionTracker.get_system_impact_report(db)
+    return await DecisionTracker.get_system_impact_report(db, normalise_cohort(cohort))
 
 
 @router.get("/analytics/energy")
@@ -1572,8 +1632,9 @@ async def simulate_user_decisions(
     via query params. Each row is given a plausible response_time_seconds,
     energy_before/after, energy_saved, and an effectiveness_score.
 
-    Admin only. Used to bootstrap the PhD research dashboard so reviewers
-    aren't shown 0/0/0/—%/—s on a freshly-deployed instance.
+    Admin only. Demo data: it is written ONLY against synthetic users
+    (users.is_synthetic) and every row is flagged is_simulated, so it can never be
+    mistaken for — or block — a real participant's response.
     """
     import random
 
@@ -1584,8 +1645,11 @@ async def simulate_user_decisions(
     # AND that don't already have a decision row
     pending_q = await db.execute(
         select(Notification.id, Notification.user_id, Notification.device_id, Notification.created_at)
+        .join(User, User.id == Notification.user_id)
         .outerjoin(UserDecision, UserDecision.notification_id == Notification.id)
         .where(
+            User.is_synthetic.is_(True),
+            Notification.requires_user_action.is_(True),
             Notification.created_at >= cutoff,
             Notification.created_at <= datetime.utcnow() - timedelta(minutes=5),
             UserDecision.id.is_(None),
@@ -1595,7 +1659,7 @@ async def simulate_user_decisions(
     )
     pending = list(pending_q.all())
     if not pending:
-        return {"status": "ok", "message": "No notifications in window without decisions", "created": 0}
+        return {"status": "ok", "message": "No actionable alerts for synthetic users without decisions in the window", "created": 0}
 
     reject_rate = max(0.0, 1.0 - accept_rate - defer_rate)
     rng = random.Random()
@@ -1658,6 +1722,8 @@ async def simulate_user_decisions(
             user_satisfaction=rng.choice([3, 4, 4, 5]) if decision_type == "ACCEPTED"
                               else rng.choice([2, 3, 3, 4]),
             impact_calculated_at=datetime.utcnow(),
+            is_simulated=True,
+            impact_scope="device" if device_id else "none",
         )
         db.add(decision)
         counts[decision_type] += 1
@@ -1665,7 +1731,7 @@ async def simulate_user_decisions(
     await db.commit()
 
     await _log_audit(
-        db, admin_id, "BULK_OPERATION",
+        db, admin_id, "SIMULATE_DECISIONS",
         details={
             "operation": "simulate_decisions",
             "created": sum(counts.values()),
@@ -1689,7 +1755,8 @@ async def simulate_user_decisions(
             "defer": defer_rate,
             "reject": round(reject_rate, 2),
         },
-        "message": f"Simulated {sum(counts.values())} decisions on notifications from the last {notification_window_days} days",
+        "message": (f"Simulated {sum(counts.values())} decisions for synthetic users on alerts from the last "
+                    f"{notification_window_days} days (flagged is_simulated; not counted in the Real cohort)"),
     }
 
 

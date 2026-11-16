@@ -264,6 +264,22 @@ async def send_daily_report():
         await NotificationEngine.send_daily_summary(db)
 
 
+# ── Deferred-alert reminders and scheduled admin sends ────────
+
+async def send_decision_reminders():
+    """Every 5 minutes: re-surface alerts the user answered with "Later"."""
+    from app.decision_tracker import DecisionTracker
+    async with AsyncSessionLocal() as db:
+        await DecisionTracker.send_due_reminders(db)
+
+
+async def dispatch_scheduled_campaigns():
+    """Every minute: deliver admin sends whose scheduled time has arrived."""
+    from app.notification_engine import NotificationEngine
+    async with AsyncSessionLocal() as db:
+        await NotificationEngine.dispatch_due_campaigns(db)
+
+
 # ── Decision Impact Calculation ───────────────────────────────
 
 async def calculate_decision_impacts():
@@ -276,6 +292,26 @@ async def calculate_decision_impacts():
 
 
 # ── Community Rankings ────────────────────────────────────────
+
+NEUTRAL_DECISION_SCORE = 70.0
+
+
+def decision_response_score(actionable: int, decided: int, avg_effectiveness: float | None) -> float:
+    """
+    The "responds to alerts" component of a ranking, 0–100.
+
+      • No alert asked for a response in the period → neutral (nothing to judge).
+      • Otherwise half is the response rate (ignoring alerts is penalised) and half is
+        the measured effectiveness of the responses (50 when none is measured yet).
+
+    A genuine 0.0 effectiveness counts as 0 — it is not replaced by a default.
+    """
+    if actionable <= 0:
+        return NEUTRAL_DECISION_SCORE if avg_effectiveness is None else float(avg_effectiveness)
+    response_rate = min(decided / actionable, 1.0)
+    effectiveness = 50.0 if avg_effectiveness is None else float(avg_effectiveness)
+    return round(50.0 * response_rate + 0.5 * effectiveness, 1)
+
 
 async def compute_rankings(target_date: date = None, period_type: str = "DAILY"):
     """
@@ -322,19 +358,28 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 Home.user_id,
                 Home.home_name,
                 Home.num_occupants,
+                User.is_synthetic,
                 func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
                 func.sum(HomeDailyTotal.total_cost_gbp).label("total_cost"),
             )
             .join(HomeDailyTotal, HomeDailyTotal.home_id == Home.id)
+            .join(User, User.id == Home.user_id)
             .where(
                 HomeDailyTotal.day_date >= period_start,
                 HomeDailyTotal.day_date <= period_end,
             )
-            .group_by(Home.id, Home.user_id, Home.home_name, Home.num_occupants)
+            .group_by(Home.id, Home.user_id, Home.home_name, Home.num_occupants, User.is_synthetic)
             .order_by(func.sum(HomeDailyTotal.total_kwh).asc())  # Lower usage = better
         )
         rows = result.all()
         total_users = len(rows)
+
+        # Real participants and synthetic demo homes are ranked separately: a real
+        # home's position must not depend on generated data.
+        cohort_size: dict[bool, int] = {}
+        for r in rows:
+            cohort_size[bool(r.is_synthetic)] = cohort_size.get(bool(r.is_synthetic), 0) + 1
+        cohort_rank: dict[bool, int] = {}
 
         # Period length in days — used to scale per-day goals up to the period
         period_days = (period_end - period_start).days + 1
@@ -349,19 +394,45 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
         )
         goal_by_user = {uid: goal for uid, goal in goal_rows.all()}
 
+        from app.models import Notification
+        synthetic_user = {r.user_id: bool(r.is_synthetic) for r in rows}
+        period_from = datetime.combine(period_start, datetime.min.time())
+        period_to = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
+
+        # Alerts that asked for a response in the period, and how many got one.
+        alert_rows = await db.execute(
+            select(Notification.user_id, func.count(Notification.id))
+            .where(
+                Notification.user_id.in_(user_ids),
+                Notification.requires_user_action.is_(True),
+                Notification.created_at >= period_from, Notification.created_at < period_to,
+            )
+            .group_by(Notification.user_id)
+        )
+        actionable_by_user = {uid: int(n) for uid, n in alert_rows.all()}
+
         dec_rows = await db.execute(
             select(
                 UserDecision.user_id,
+                UserDecision.is_simulated,
+                func.count(UserDecision.id),
                 func.avg(UserDecision.effectiveness_score),
             )
             .where(
                 UserDecision.user_id.in_(user_ids),
-                func.date(UserDecision.created_at) >= period_start,
-                func.date(UserDecision.created_at) <= period_end,
+                UserDecision.created_at >= period_from, UserDecision.created_at < period_to,
             )
-            .group_by(UserDecision.user_id)
+            .group_by(UserDecision.user_id, UserDecision.is_simulated)
         )
-        decision_by_user = {uid: score for uid, score in dec_rows.all()}
+        # Simulated decisions only ever count for synthetic users.
+        decided_by_user: dict[int, int] = {}
+        effectiveness_by_user: dict[int, float] = {}
+        for uid, simulated, n, avg_eff in dec_rows.all():
+            if simulated and not synthetic_user.get(uid):
+                continue
+            decided_by_user[uid] = decided_by_user.get(uid, 0) + int(n)
+            if avg_eff is not None:
+                effectiveness_by_user[uid] = float(avg_eff)
 
         existing_rows = await db.execute(
             select(EnergyRanking).where(
@@ -372,8 +443,11 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
         )
         ranking_by_user = {r.user_id: r for r in existing_rows.scalars().all()}
 
-        for rank, hdt in enumerate(rows, start=1):
+        for hdt in rows:
             try:
+                cohort_key = bool(hdt.is_synthetic)
+                rank = cohort_rank[cohort_key] = cohort_rank.get(cohort_key, 0) + 1
+                total_users = cohort_size[cohort_key]
                 occupants = max((hdt.num_occupants or 1), 1)
                 # Per-occupant per-day usage normalises across home size + period length
                 kwh_per_person_per_day = float(hdt.total_kwh) / occupants / max(period_days, 1)
@@ -388,7 +462,11 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 else:
                     adherence = 70.0  # Default when no goal set
 
-                avg_decision_score = decision_by_user.get(hdt.user_id) or 70.0
+                avg_decision_score = decision_response_score(
+                    actionable=actionable_by_user.get(hdt.user_id, 0),
+                    decided=decided_by_user.get(hdt.user_id, 0),
+                    avg_effectiveness=effectiveness_by_user.get(hdt.user_id),
+                )
 
                 overall = (eff_score * 0.4 + adherence * 0.35 + float(avg_decision_score) * 0.25)
                 percentile = ((total_users - rank) / max(total_users - 1, 1)) * 100
@@ -629,7 +707,6 @@ async def detect_and_notify_anomalies(
                     for r in baseline_rows}
 
         # Recent hourly buckets to evaluate
-        from app.models import Notification
         recent_rows = (await db.execute(
             select(
                 HourlySummary.device_id,
@@ -677,6 +754,7 @@ async def detect_and_notify_anomalies(
                 severity=severity,
                 home_id=r.home_id,
                 device_id=r.device_id,
+                rule_key="anomaly_hourly",
                 requires_user_action=True,
                 action_hint="Investigate this device's usage.",
                 action_button_text="View device",

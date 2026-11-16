@@ -25,7 +25,7 @@ as already applied.
 import logging
 from typing import Awaitable, Callable
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 logger = logging.getLogger("migrations")
@@ -144,11 +144,101 @@ async def m002_audit_action_types(conn: AsyncConnection) -> None:
     ])
 
 
+SIMULATOR_ACTION_LABELS = (
+    "Followed recommendation — reduced/delayed usage",
+    "Postponed action — recheck later",
+    "Continued normal usage",
+)
+SYNTHETIC_EMAIL_DOMAIN = "@wattwise-cardiff.co.uk"
+
+
+async def m003_core_loop(conn: AsyncConnection) -> None:
+    """
+    Schema for the alert → open → decide → report → admin loop:
+      • notifications know where they came from (source / rule_key / campaign) and
+        when they were actually opened;
+      • every admin send is a campaign row, so responses can be traced back to it;
+      • decisions can be updated, reminded, and are flagged when simulated;
+      • users are flagged synthetic so research analytics can exclude them.
+    """
+    # ── campaigns (one row per admin send) ──
+    await conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS notification_campaigns ("
+        " id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+        " created_by INT UNSIGNED DEFAULT NULL,"
+        " title VARCHAR(256) NOT NULL,"
+        " message TEXT NOT NULL,"
+        " notification_type VARCHAR(32) NOT NULL DEFAULT 'ADMIN_BROADCAST',"
+        " severity VARCHAR(16) NOT NULL DEFAULT 'INFO',"
+        " requires_user_action TINYINT(1) NOT NULL DEFAULT 0,"
+        " action_hint VARCHAR(256) DEFAULT NULL,"
+        " action_button_text VARCHAR(64) DEFAULT NULL,"
+        " target_json JSON DEFAULT NULL,"
+        " status ENUM('SCHEDULED','SENT','CANCELLED') NOT NULL DEFAULT 'SENT',"
+        " send_at DATETIME DEFAULT NULL,"
+        " sent_at DATETIME DEFAULT NULL,"
+        " recipients_targeted INT NOT NULL DEFAULT 0,"
+        " notifications_created INT NOT NULL DEFAULT 0,"
+        " created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        " FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,"
+        " INDEX idx_campaign_status (status, send_at)"
+        ") ENGINE=InnoDB"
+    ))
+
+    # ── notifications ──
+    await add_column(conn, "notifications", "source", "ENUM('AUTOMATED','ADMIN') NOT NULL DEFAULT 'AUTOMATED'")
+    await add_column(conn, "notifications", "rule_key", "VARCHAR(64) DEFAULT NULL")
+    await add_column(conn, "notifications", "campaign_id", "BIGINT UNSIGNED DEFAULT NULL")
+    await add_column(conn, "notifications", "opened_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "notifications", "dedup_key", "VARCHAR(160) DEFAULT NULL")
+    await add_index(conn, "notifications", "idx_notif_campaign", "campaign_id")
+    await add_index(conn, "notifications", "idx_notif_dedup", "user_id, dedup_key, created_at")
+    await conn.execute(text(
+        "UPDATE notifications SET source = 'ADMIN' WHERE notification_type = 'ADMIN_BROADCAST' AND source <> 'ADMIN'"
+    ))
+
+    # ── user_decisions ──
+    await add_column(conn, "user_decisions", "is_simulated", "TINYINT(1) NOT NULL DEFAULT 0")
+    await add_column(conn, "user_decisions", "updated_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "user_decisions", "remind_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "user_decisions", "reminded_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "user_decisions", "impact_scope", "ENUM('device','home','none') DEFAULT NULL")
+    # Rows written by the old simulator are recognisable only by its three fixed labels.
+    await conn.execute(
+        text("UPDATE user_decisions SET is_simulated = 1 WHERE is_simulated = 0 AND action_taken IN :labels")
+        .bindparams(bindparam("labels", expanding=True)),
+        {"labels": list(SIMULATOR_ACTION_LABELS)},
+    )
+    await conn.execute(text(
+        "UPDATE user_decisions SET impact_scope = 'device' WHERE impact_scope IS NULL AND device_id IS NOT NULL"
+    ))
+    await add_index(conn, "user_decisions", "idx_decisions_simulated", "is_simulated, created_at")
+    await add_index(conn, "user_decisions", "idx_decisions_remind", "remind_at")
+    # One decision per (user, alert). Remove any duplicates the app-level check let through first.
+    if not await index_exists(conn, "user_decisions", "uq_decision_user_notification"):
+        await conn.execute(text(
+            "DELETE d FROM user_decisions d JOIN user_decisions k "
+            "  ON k.user_id = d.user_id AND k.notification_id = d.notification_id AND k.id < d.id"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE user_decisions ADD UNIQUE INDEX uq_decision_user_notification (user_id, notification_id)"
+        ))
+
+    # ── users ──
+    await add_column(conn, "users", "is_synthetic", "TINYINT(1) NOT NULL DEFAULT 0")
+    await conn.execute(
+        text("UPDATE users SET is_synthetic = 1 WHERE is_synthetic = 0 AND email LIKE :pat"),
+        {"pat": f"%{SYNTHETIC_EMAIL_DOMAIN}"},
+    )
+    await add_index(conn, "users", "idx_users_synthetic", "is_synthetic")
+
+
 Migration = tuple[int, str, Callable[[AsyncConnection], Awaitable[None]]]
 
 MIGRATIONS: list[Migration] = [
     (1, "keep_decisions_when_notifications_expire", m001_keep_decisions_when_notifications_expire),
     (2, "audit_action_types", m002_audit_action_types),
+    (3, "core_loop", m003_core_loop),
 ]
 
 
