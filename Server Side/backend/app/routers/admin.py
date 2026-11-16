@@ -125,7 +125,7 @@ async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     request: Request, db: AsyncSession = Depends(get_db),
-    page: int = Query(default=1, ge=1), limit: int = Query(default=50, ge=1, le=500),
+    page: int = Query(default=1, ge=1), limit: int = Query(default=50, ge=1, le=1000),
     persona_id: Optional[int] = Query(default=None),
     search: Optional[str] = Query(default=None),
     cohort: str = Query(default="all"),
@@ -510,6 +510,7 @@ async def get_rankings(
     request: Request, db: AsyncSession = Depends(get_db),
     period: str = Query(default="DAILY", pattern="^(DAILY|WEEKLY|MONTHLY)$"),
     date_str: Optional[str] = Query(default=None),
+    cohort: str = Query(default="real"),
 ):
     """
     Return rankings for a single period.
@@ -519,6 +520,11 @@ async def get_rankings(
       list of available period_starts so the UI can build a navigator.
     """
     _require_admin(request)
+    # Rankings are computed separately for real and synthetic homes (see scheduler.compute_rankings).
+    cohort = normalise_cohort(cohort)
+    in_cohort = [] if cohort == "all" else [
+        EnergyRanking.user_id.in_(select(User.id).where(User.is_synthetic.is_(cohort == "synthetic")))
+    ]
 
     # Resolve target date — caller's choice, or latest available
     if date_str:
@@ -526,14 +532,14 @@ async def get_rankings(
     else:
         latest = await db.execute(
             select(func.max(EnergyRanking.period_start))
-            .where(EnergyRanking.period_type == period)
+            .where(EnergyRanking.period_type == period, *in_cohort)
         )
         target_date = latest.scalar_one_or_none() or (date.today() - timedelta(days=1))
 
     # Build list of available period_starts (for the date-navigator dropdown)
     avail_result = await db.execute(
         select(EnergyRanking.period_start)
-        .where(EnergyRanking.period_type == period)
+        .where(EnergyRanking.period_type == period, *in_cohort)
         .group_by(EnergyRanking.period_start)
         .order_by(EnergyRanking.period_start.desc())
         .limit(60)
@@ -556,7 +562,7 @@ async def get_rankings(
         select(EnergyRanking, User, Home)
         .join(User, EnergyRanking.user_id == User.id)
         .join(Home, EnergyRanking.home_id == Home.id)
-        .where(EnergyRanking.period_type == period, EnergyRanking.period_start == target_date)
+        .where(EnergyRanking.period_type == period, EnergyRanking.period_start == target_date, *in_cohort)
         .order_by(EnergyRanking.rank_position.asc())
     )
     rows = result.all()

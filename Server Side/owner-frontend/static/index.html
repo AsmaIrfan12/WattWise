@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="icon" href="data:,"/>
   <title>WattWise — Admin Command Centre</title>
   <meta name="description" content="WattWise Admin Portal — Community Energy Management, User Analytics, Persona Classification, and Research Dashboard."/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -14,6 +15,16 @@
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
   <link rel="stylesheet" href="/css/admin.css"/>
+<style>
+.cohort-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ca3af; margin-right: 10px; }
+.cohort-note { font-size: 11px; font-weight: 500; color: #9ca3af; margin-left: 6px; }
+.form-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #d1d5db; margin: 4px 0 10px; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 10px 4px 0; font-size: 12px; color: #9ca3af; }
+.dx-note { font-size: 11px; color: #9ca3af; font-style: italic; max-width: 280px; }
+.tag-sim { font-size: 10px; padding: 1px 5px; border-radius: 8px; border: 1px solid #6b7280; color: #9ca3af; margin-left: 4px; }
+#campaign-detail { border-top: 1px solid #374151; margin-top: 10px; padding-top: 10px; }
+tr.row-click { cursor: pointer; }
+</style>
 </head>
 <body>
 
@@ -55,6 +66,9 @@
   <a class="nav-item" href="#" data-section="notifications" id="nav-notifications">
     <span class="nav-icon">🔔</span> Notifications
   </a>
+  <a class="nav-item" href="#" data-section="decisions" id="nav-decisions">
+    <span class="nav-icon">✅</span> Decisions
+  </a>
 
   <div class="nav-section-label">System</div>
   <a class="nav-item" href="#" data-section="backup" id="nav-backup">
@@ -80,6 +94,14 @@
       <h1 class="page-title" id="page-title">Dashboard</h1>
     </div>
     <div class="topbar-right">
+      <label class="cohort-switch" title="Which accounts the numbers include. Real = participants with a device in their home; Synthetic = demo accounts fed by the data generator.">
+        Data
+        <select id="cohort-switch" class="select-sm">
+          <option value="real">Real participants</option>
+          <option value="synthetic">Synthetic (demo)</option>
+          <option value="all">All</option>
+        </select>
+      </label>
       <button class="btn-icon" id="btn-theme-toggle" aria-label="Toggle Theme" style="margin-right:8px">☀️</button>
       <div class="connection-badge" id="connection-badge">
         <span class="dot green"></span> Live
@@ -195,7 +217,7 @@
     <div class="charts-row">
       <div class="card">
         <div class="card-header">
-          <h2 class="card-title">Decision Impact</h2>
+          <h2 class="card-title">Decision Impact <span class="cohort-note" data-cohort-label></span></h2>
         </div>
         <div id="decision-impact-panel" class="impact-grid">
           <div class="impact-stat"><div class="impact-val" id="di-total">—</div><div class="impact-lbl">Decisions</div></div>
@@ -203,6 +225,7 @@
           <div class="impact-stat"><div class="impact-val green" id="di-saved-gbp">—</div><div class="impact-lbl">£ Saved</div></div>
           <div class="impact-stat"><div class="impact-val" id="di-effectiveness">—%</div><div class="impact-lbl">Effectiveness</div></div>
           <div class="impact-stat"><div class="impact-val" id="di-response-time">—s</div><div class="impact-lbl">Avg Response</div></div>
+          <div class="impact-stat"><div class="impact-val" id="di-split">—</div><div class="impact-lbl">Done / Later / Skipped</div></div>
         </div>
       </div>
 
@@ -603,10 +626,10 @@
         <div class="card-header"><h2 class="card-title">Send Notification</h2></div>
         <form id="notif-form" class="notif-form">
           <label class="form-label">Title
-            <input type="text" id="notif-title" class="input-field" placeholder="Notification title" maxlength="128" required/>
+            <input type="text" id="notif-title" class="input-field" placeholder="Notification title" maxlength="200" required/>
           </label>
           <label class="form-label">Message
-            <textarea id="notif-message" class="input-field textarea" placeholder="Notification message…" rows="4" maxlength="512" required></textarea>
+            <textarea id="notif-message" class="input-field textarea" placeholder="Notification message…" rows="4" maxlength="2000" required></textarea>
           </label>
           <label class="form-label">Type
             <select id="notif-type" class="input-field">
@@ -624,22 +647,52 @@
               <option value="CRITICAL">❗ Critical</option>
             </select>
           </label>
+          <label class="form-check">
+            <input type="checkbox" id="notif-requires-action"/>
+            Ask each user to respond (Done / Later / Skip) and report what they did
+          </label>
+          <div id="notif-action-fields" style="display:none">
+            <label class="form-label">Suggested action (shown under the message)
+              <input type="text" id="notif-action-hint" class="input-field" maxlength="256" placeholder="e.g. Run the dishwasher after 7 pm tonight"/>
+            </label>
+            <label class="form-label">Button text
+              <input type="text" id="notif-button-text" class="input-field" maxlength="64" placeholder="Done it!"/>
+            </label>
+            <label class="form-label">About which appliance? (lets the energy effect be measured on that device)
+              <select id="notif-appliance" class="input-field">
+                <option value="">Whole home</option>
+                <option value="kettle">Kettle</option>
+                <option value="microwave">Microwave</option>
+                <option value="washing_machine">Washing machine</option>
+                <option value="dishwasher">Dishwasher</option>
+                <option value="toaster">Toaster</option>
+                <option value="airfryer">Air fryer</option>
+              </select>
+            </label>
+          </div>
           <label class="form-label">Target
             <select id="notif-target" class="input-field">
-              <option value="all">All Users</option>
-              <option value="persona">By Persona</option>
-              <option value="specific">Specific User IDs</option>
+              <option value="all">Everyone</option>
+              <option value="real">Real participants only</option>
+              <option value="synthetic">Synthetic (demo) accounts only</option>
+              <option value="persona">By persona</option>
+              <option value="specific">Specific user IDs</option>
+              <option value="homes">Specific home IDs</option>
             </select>
           </label>
           <div id="notif-target-extra" style="display:none">
-            <input type="text" id="notif-user-ids" class="input-field" placeholder="Comma-separated user IDs…"/>
+            <input type="text" id="notif-user-ids" class="input-field" placeholder="Comma-separated IDs…"/>
           </div>
+          <label class="form-label">Send at (leave empty to send now)
+            <input type="datetime-local" id="notif-send-at" class="input-field"/>
+          </label>
           <div id="notif-target-persona" style="display:none">
             <select id="notif-persona-id" class="input-field">
               <option value="">Loading personas…</option>
             </select>
           </div>
           <button type="submit" class="btn-primary btn-full" id="btn-notif-send">Send Notification</button>
+          <button type="button" class="btn-outline btn-full" id="btn-notif-save-template" style="margin-top:6px">Save as template</button>
           <div id="notif-feedback" class="form-feedback"></div>
         </form>
       </div>
@@ -736,6 +789,85 @@
   </section>
 
   <!-- ── SECTION: AUDIT LOG ────────────────────────────────── -->
+  <!-- ── DECISIONS: who received, opened, decided and did what ── -->
+  <section class="section" id="section-decisions">
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Alert funnel <span class="cohort-note" data-cohort-label></span></h2>
+        <div class="card-actions">
+          <select id="funnel-source" class="select-sm">
+            <option value="">All alerts</option>
+            <option value="AUTOMATED">Automated</option>
+            <option value="ADMIN">Sent by admin</option>
+          </select>
+          <select id="funnel-days" class="select-sm">
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+          </select>
+        </div>
+      </div>
+      <div id="funnel-kpis" class="impact-grid"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Alert type</th><th>Source</th><th>Sent</th><th>Opened</th><th>Asked for response</th><th>Decided</th><th>Done</th><th>Later</th><th>Skipped</th><th>Response rate</th><th>Avg response</th><th>kWh saved</th></tr></thead>
+          <tbody id="funnel-tbody"><tr><td colspan="12" class="loading-row">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Admin sends (campaigns)</h2>
+        <div class="card-actions"><button class="btn-outline btn-sm" id="btn-reload-campaigns">Reload</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>When</th><th>Title</th><th>Target</th><th>Status</th><th>Sent</th><th>Opened</th><th>Decided</th><th>No response</th><th>Response rate</th><th></th></tr></thead>
+          <tbody id="campaigns-tbody"><tr><td colspan="10" class="loading-row">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="campaign-detail" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Decisions <span class="cohort-note" data-cohort-label></span></h2>
+        <div class="card-actions">
+          <select id="dx-type" class="select-sm">
+            <option value="">Any decision</option>
+            <option value="ACCEPTED">Done</option>
+            <option value="CUSTOM_ACTION">Done their own way</option>
+            <option value="DEFERRED">Later</option>
+            <option value="REJECTED">Skipped</option>
+          </select>
+          <select id="dx-source" class="select-sm">
+            <option value="">Any source</option>
+            <option value="AUTOMATED">Automated alert</option>
+            <option value="ADMIN">Admin send</option>
+          </select>
+          <select id="dx-measured" class="select-sm">
+            <option value="any">Measured or not</option>
+            <option value="yes">Impact measured</option>
+            <option value="no">Not measured</option>
+          </select>
+          <input type="date" id="dx-from" class="select-sm" title="From"/>
+          <input type="date" id="dx-to" class="select-sm" title="To"/>
+          <input type="number" id="dx-user" class="select-sm" placeholder="User ID" style="width:90px"/>
+          <button class="btn-outline btn-sm" id="btn-dx-apply">Apply</button>
+          <button class="btn-primary btn-sm" id="btn-dx-export">⬇ Export CSV</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Decided</th><th>User</th><th>Alert</th><th>Device</th><th>Decision</th><th>What they did</th><th>Rating</th><th>Response time</th><th>kWh saved</th><th>Effectiveness</th></tr></thead>
+          <tbody id="dx-tbody"><tr><td colspan="10" class="loading-row">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager" id="dx-pager"></div>
+    </div>
+  </section>
+
   <section class="section" id="section-audit">
     <div class="card">
       <div class="card-header">

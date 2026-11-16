@@ -185,6 +185,33 @@ section.active { display: block; }
 .notif-msg { font-size: .8rem; color: var(--t2); line-height: 1.4; }
 .notif-time { font-size: .7rem; color: var(--mu); margin-top: 5px; }
 .notif-actions { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
+.notif-actions.col { flex-direction: column; gap: 4px; align-items: flex-start; }
+.notif-item { cursor: pointer; }
+.notif-item.seen { opacity: .62; }
+.notif-item.focus { outline: 2px solid var(--green); outline-offset: 2px; opacity: 1; }
+.notif-hint { font-size: .72rem; color: var(--amber); margin-top: 4px; }
+.ntag { display: inline-block; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--bd); font-size: .66rem; color: var(--mu); }
+.ntag.need { color: var(--amber); border-color: var(--amber); }
+.ntag.team { color: #60a5fa; border-color: #60a5fa; }
+.dec-state { font-size: .76rem; font-weight: 600; }
+.dec-state.dec-ACCEPTED, .dec-state.dec-CUSTOM_ACTION { color: var(--green); }
+.dec-state.dec-DEFERRED { color: var(--amber); }
+.dec-state.dec-REJECTED { color: var(--mu); }
+.dec-note { font-size: .74rem; color: var(--t2); font-style: italic; }
+.dec-impact { font-size: .7rem; color: var(--mu); }
+.dec-impact.good { color: var(--green); }
+/* ── Report sheet ──────────────────────────────────────────── */
+.sheet-backdrop { display: none; position: fixed; inset: 0; z-index: 400; background: rgba(2,6,23,.7); align-items: flex-end; justify-content: center; }
+.sheet-backdrop.open { display: flex; }
+.sheet { width: 100%; max-width: 520px; background: var(--surf); border: 1px solid var(--bd); border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+.sheet-h { font-size: 1rem; font-weight: 700; }
+.sheet-sub { font-size: .78rem; color: var(--mu); margin-top: 2px; }
+.sheet-label { font-size: .76rem; color: var(--t2); margin: 12px 0 4px; }
+.sheet .inp { width: 100%; background: var(--surf2); border: 1px solid var(--bd); border-radius: var(--radius-sm); color: var(--t); padding: 9px 11px; font-size: .84rem; font-family: inherit; }
+.stars { display: flex; gap: 4px; margin-bottom: 8px; }
+.star { background: none; border: none; font-size: 1.7rem; line-height: 1; color: var(--bd); cursor: pointer; padding: 0 2px; }
+.star.on { color: var(--amber); }
+
 
 /* ── Filter pills ────────────────────────────────────────────── */
 .filter-bar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -543,6 +570,23 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
   </div>
 </section>
 
+<!-- ── "What did you do?" sheet (alert response) ─────────────── -->
+<div id="report-sheet" class="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="rs-heading">
+  <div class="sheet">
+    <div id="rs-heading" class="sheet-h">What did you do?</div>
+    <div id="rs-title" class="sheet-sub"></div>
+    <div id="rs-presets" class="filter-bar" style="margin:10px 0 8px"></div>
+    <input id="rs-action" class="inp" maxlength="500" placeholder="…or describe it in your own words" autocomplete="off">
+    <div class="sheet-label">How useful was this alert? <span style="color:var(--mu)">(optional)</span></div>
+    <div id="rs-stars" class="stars"></div>
+    <textarea id="rs-feedback" class="inp" rows="2" maxlength="2000" placeholder="Anything else to tell us? (optional)"></textarea>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-g" id="rs-save" style="flex:1">Save</button>
+      <button class="btn btn-outline" id="rs-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── NOTIFICATIONS ──────────────────────────────────────── -->
 <section id="s-notifications">
   <div class="filter-bar" style="margin-bottom:8px">
@@ -773,6 +817,7 @@ const loaders = {
 };
 
 function goSection(name) {
+  if (SECTION_EVENTS[name] && name !== _activeSection) track(SECTION_EVENTS[name], name);
   _activeSection = name;
   document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
   document.getElementById('s-' + name)?.classList.add('active');
@@ -786,7 +831,9 @@ function applyDeepLink() {
   try {
     const params = new URLSearchParams(location.search);
     const cat = params.get('category');
-    if (location.pathname.includes('notification') || cat) {
+    const focus = parseInt(params.get('notification') || params.get('highlight') || '', 10);
+    if (focus) _pendingFocusId = focus;
+    if (location.pathname.includes('notification') || cat || focus) {
       goSection('notifications');
       if (cat === 'alerts' || cat === 'notifications') {
         setTimeout(() => switchNotifCategory(cat), 60);
@@ -846,6 +893,7 @@ async function login() {
 }
 
 function logout() {
+  track('LOGOUT', _activeSection);
   token = '';
   localStorage.removeItem('ww_token');
   homeId = null; userId = null; userData = null;
@@ -885,6 +933,7 @@ async function init() {
     document.getElementById('av').textContent = userData.name?.[0]?.toUpperCase() || 'U';
     setAuthUi(true);
     await populatePersonaChip(userData);
+    track('APP_OPEN', 'home', { metadata: { standalone: !!window.WattWiseApp } });
     await loadHome();
     refreshNotifBadge();
     applyDeepLink();
@@ -905,7 +954,7 @@ async function init() {
 }
 
 async function populatePersonaChip(u) {
-  if (!u.persona_id) return;
+  if (!u.persona_name) return;
   const colours = {
     'Eco Champion':    ['#10b981', 'rgba(16,185,129,.15)'],
     'Active Improver': ['#3b82f6', 'rgba(59,130,246,.15)'],
@@ -913,24 +962,19 @@ async function populatePersonaChip(u) {
     'High Consumer':   ['#f59e0b', 'rgba(245,158,11,.15)'],
     'Disengaged':      ['#6b7280', 'rgba(107,114,128,.15)'],
   };
-  try {
-    const personas = await apiFetch('/analysis/personas');
-    const p = (personas || []).find(x => x.id === u.persona_id);
-    if (!p) return;
-    const chip = document.getElementById('persona-chip');
-    if (!chip) return;
-    chip.textContent = p.name;
-    chip.style.background = colours[p.name]?.[1] || 'rgba(139,92,246,.15)';
-    chip.style.color = colours[p.name]?.[0] || '#8b5cf6';
-    chip.style.display = 'inline-flex';
-  } catch {}
+  const chip = document.getElementById('persona-chip');
+  if (!chip) return;
+  chip.textContent = u.persona_name;
+  chip.style.background = colours[u.persona_name]?.[1] || 'rgba(139,92,246,.15)';
+  chip.style.color = colours[u.persona_name]?.[0] || '#8b5cf6';
+  chip.style.display = 'inline-flex';
 }
 
 async function refreshNotifBadge() {
   try {
-    // Badge reflects pending system ALERTS (the interactive ones), not admin messages.
-    const notifs = await apiFetch('/notifications/?limit=5&filter=unread&category=alerts');
-    _pendingNotifCount = notifs?.length || 0;
+    // Badge = anything still waiting for the user: unread, or asking for a response.
+    const stats = await apiFetch('/notifications/stats');
+    _pendingNotifCount = (stats?.unread || 0) + (stats?.requires_action || 0);
     document.getElementById('notif-badge').style.display = _pendingNotifCount > 0 ? 'block' : 'none';
   } catch {}
 }
@@ -1096,10 +1140,11 @@ function buildBillPrediction(data, avgDailyCost) {
 
 async function loadAlertPreview() {
   try {
-    const notifs = await apiFetch('/notifications/?limit=3&filter=unread');
+    const notifs = await apiFetch('/notifications/?limit=3&filter=action_required');
     const el = document.getElementById('home-alerts');
     if (!notifs?.length) { el.innerHTML = '<div class="empty">🎉 No new alerts</div>'; return; }
-    el.innerHTML = notifs.map(n => notifHTML(n, false)).join('');
+    notifs.forEach(n => { _notifCache[n.id] = n; });
+    el.innerHTML = notifs.map(n => notifHTML(n, true)).join('');
   } catch {}
 }
 
@@ -1571,8 +1616,28 @@ async function addDevice() {
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────
+// Each alert comes back from the server WITH the user's decision (if any), so the
+// card is always drawn from server state — buttons never "come back" after a refresh.
 let nFilter = 'all';
-let nCategory = 'alerts';   // 'alerts' (system, interactive) | 'notifications' (admin messages)
+let nCategory = 'alerts';   // 'alerts' (rule engine) | 'notifications' (messages from the team)
+let _notifCache = {};        // id -> alert, for the report sheet
+let _pendingFocusId = null;  // alert to open + highlight once the list has loaded (deep link)
+
+// What a user is likely to have done, per appliance — one tap instead of typing.
+const ACTION_PRESETS = {
+  kettle:          ['Boiled only the water I needed', 'Waited until off-peak'],
+  washing_machine: ['Ran one full load instead of two', 'Moved it to off-peak', 'Used an eco / 30° cycle'],
+  dishwasher:      ['Waited for a full load', 'Moved it to off-peak', 'Used the eco programme'],
+  airfryer:        ['Cooked for less time', 'Batch-cooked in one go', 'Moved it out of peak hours'],
+  microwave:       ['Used it for less time', 'Switched it off at the wall'],
+  toaster:         ['Toasted once instead of twice', 'Switched it off at the wall'],
+  dryer:           ['Air-dried instead', 'Moved it to off-peak'],
+  _default:        ['Switched it off', 'Used it for less time', 'Moved it to off-peak', 'Unplugged standby devices'],
+};
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 async function loadNotifications() {
   try {
@@ -1580,12 +1645,15 @@ async function loadNotifications() {
     const el = document.getElementById('notif-list');
     if (!notifs?.length) {
       const empty = nCategory === 'notifications' ? 'No messages from the team yet' : 'No alerts — your usage looks fine 👍';
-      el.innerHTML = '<div class="empty" style="padding:24px">' + empty + '</div>'; return;
+      el.innerHTML = '<div class="empty" style="padding:24px">' + empty + '</div>';
+    } else {
+      notifs.forEach(n => { _notifCache[n.id] = n; });
+      el.innerHTML = notifs.map(n => `<div style="padding:0 14px">${notifHTML(n, true)}</div>`).join('');
+      // "Seen in the list" (is_read). Opening an alert is recorded separately, on tap.
+      const unread = notifs.filter(n => !n.is_read).map(n => n.id);
+      if (unread.length) setTimeout(() => markRead(unread), 2000);
     }
-    el.innerHTML = notifs.map(n => `<div style="padding:0 14px">${notifHTML(n, true)}</div>`).join('');
-    // Mark unread ones as read after 2s
-    const unread = notifs.filter(n => !n.is_read).map(n => n.id);
-    if (unread.length) setTimeout(() => markRead(unread), 2000);
+    focusPendingAlert(notifs || []);
   } catch {}
 }
 
@@ -1616,40 +1684,221 @@ document.querySelectorAll('.filter-pill[data-cat]').forEach(pill => {
   pill.addEventListener('click', () => switchNotifCategory(pill.dataset.cat));
 });
 
+function decisionSummary(d) {
+  const labels = { ACCEPTED: '✅ Done', CUSTOM_ACTION: '✍️ Done my way', DEFERRED: '⏰ Later', REJECTED: '❌ Skipped' };
+  let line = labels[d.decision_type] || d.decision_type;
+  if (d.decision_type === 'DEFERRED' && d.remind_at) {
+    line += ' · reminder ' + new Date(d.remind_at + 'Z').toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+  let extra = '';
+  if (d.action_taken) extra += `<div class="dec-note">“${esc(d.action_taken)}”</div>`;
+  if (d.energy_saved_kwh != null && d.impact_calculated_at) {
+    const saved = Number(d.energy_saved_kwh);
+    extra += saved > 0.0005
+      ? `<div class="dec-impact good">Saved ${saved.toFixed(3)} kWh${d.cost_saved_gbp > 0 ? ' · £' + Number(d.cost_saved_gbp).toFixed(2) : ''} in the 2 hours after</div>`
+      : `<div class="dec-impact">No measurable saving in the 2 hours after</div>`;
+  } else if (['ACCEPTED', 'CUSTOM_ACTION'].includes(d.decision_type) && d.impact_scope !== 'none') {
+    extra += `<div class="dec-impact">Measuring the effect over the next 2 hours…</div>`;
+  }
+  return `<div class="dec-state dec-${esc(d.decision_type)}">${line}</div>${extra}`;
+}
+
 function notifHTML(n, showActions = false) {
-  const time = new Date(n.created_at).toLocaleString('en-GB', { timeStyle: 'short', dateStyle: 'short' });
-  return `<div class="notif-item ${n.severity}" data-notif-id="${n.id}" style="${n.is_read ? 'opacity:.6' : ''}">
-    <div class="notif-title">${san(n.title)}</div>
-    <div class="notif-msg">${san(n.message)}</div>
-    ${n.action_hint ? `<div style="font-size:.72rem;color:var(--amber);margin-top:4px">💡 ${san(n.action_hint)}</div>` : ''}
-    <div class="notif-time">${time}${n.requires_user_action && !n.dismissed ? ' · <span style="color:var(--amber)">Action needed</span>' : ''}</div>
-    ${showActions && n.requires_user_action && !n.dismissed ? `<div class="notif-actions" data-actions-for="${n.id}">
-      <button class="btn btn-g btn-sm" onclick="recordDecision(${n.id},'ACCEPTED')">✅ Done it!</button>
-      <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'DEFERRED')">⏰ Later</button>
-      <button class="btn btn-outline btn-sm" onclick="recordDecision(${n.id},'REJECTED')">❌ Skip</button>
-    </div>` : ''}
+  const time = new Date(n.created_at + (String(n.created_at).endsWith('Z') ? '' : 'Z'))
+    .toLocaleString('en-GB', { timeStyle: 'short', dateStyle: 'short' });
+  const d = n.decision;
+  const waiting = n.requires_user_action && !n.dismissed && !d && !n.is_expired;
+  const tags = [];
+  if (n.source === 'ADMIN') tags.push('<span class="ntag team">From the team</span>');
+  if (n.device_name) tags.push(`<span class="ntag">${esc(iconFor(n.appliance_key))} ${esc(n.device_name)}</span>`);
+  if (waiting) tags.push('<span class="ntag need">Action needed</span>');
+  if (n.is_expired && !d) tags.push('<span class="ntag">Expired</span>');
+
+  let actions = '';
+  if (showActions) {
+    if (d) {
+      actions = `<div class="notif-actions col" data-actions-for="${n.id}">${decisionSummary(d)}`;
+      if (d.decision_type === 'DEFERRED') {
+        actions += `<div class="notif-actions">
+          <button class="btn btn-g btn-sm" data-act="report" data-id="${n.id}">✅ Mark as done</button>
+          <button class="btn btn-outline btn-sm" data-act="skip" data-id="${n.id}">❌ Skip</button></div>`;
+      } else if (['ACCEPTED', 'CUSTOM_ACTION'].includes(d.decision_type) && !d.action_taken) {
+        actions += `<div class="notif-actions"><button class="btn btn-outline btn-sm" data-act="report" data-id="${n.id}">✍️ Tell us what you did</button></div>`;
+      }
+      actions += '</div>';
+    } else if (waiting) {
+      actions = `<div class="notif-actions" data-actions-for="${n.id}">
+        <button class="btn btn-g btn-sm" data-act="report" data-id="${n.id}">✅ ${esc(n.action_button_text || 'Done it!')}</button>
+        <button class="btn btn-outline btn-sm" data-act="later" data-id="${n.id}">⏰ Later</button>
+        <button class="btn btn-outline btn-sm" data-act="skip" data-id="${n.id}">❌ Skip</button>
+      </div>`;
+    }
+  }
+  return `<div class="notif-item ${esc(n.severity)}${n.is_read && !waiting ? ' seen' : ''}" data-notif-id="${n.id}" data-act="open" data-id="${n.id}">
+    <div class="notif-title">${esc(n.title)}</div>
+    <div class="notif-msg">${esc(n.message)}</div>
+    ${n.action_hint ? `<div class="notif-hint">💡 ${esc(n.action_hint)}</div>` : ''}
+    <div class="notif-time">${time}${tags.length ? ' · ' + tags.join(' ') : ''}</div>
+    ${actions}
   </div>`;
 }
 
-async function recordDecision(notifId, type) {
+// One delegated handler for every alert card (home preview and the Alerts tab).
+document.addEventListener('click', e => {
+  const target = e.target.closest('[data-act]');
+  if (!target) return;
+  const id = Number(target.dataset.id);
+  const act = target.dataset.act;
+  if (act === 'open') { openAlert(id); return; }
+  e.stopPropagation();
+  if (act === 'report') openReportSheet(id);
+  else if (act === 'later') quickDecision(id, 'DEFERRED');
+  else if (act === 'skip') quickDecision(id, 'REJECTED');
+});
+
+// The user explicitly opened this alert — recorded once on the server (opened_at).
+const _openedThisSession = new Set();
+function openAlert(id) {
+  if (!id || _openedThisSession.has(id)) return;
+  _openedThisSession.add(id);
+  const cached = _notifCache[id];
+  if (cached && cached.opened_at) return;
+  apiFetch('/notifications/' + id + '/open', { method: 'POST' })
+    .then(n => { if (n) _notifCache[id] = n; refreshNotifBadge(); })
+    .catch(() => {});
+}
+
+// "Later" and "Skip": one tap. Creates the decision, or updates the deferred one.
+async function quickDecision(id, type) {
+  const existing = _notifCache[id]?.decision;
   try {
-    await apiFetch('/decisions/', { method: 'POST', body: JSON.stringify({ notification_id: notifId, decision_type: type }) });
-    const label = type === 'ACCEPTED' ? '✅ Done it!' : type === 'DEFERRED' ? '⏰ Saved for later' : '❌ Skipped';
-    toast(type === 'ACCEPTED' ? '✅ Great! We\'ll track your savings.' : type === 'DEFERRED' ? '⏰ Reminder set!' : 'Noted.');
-
-    // Update only this specific card — do NOT reload all notifications,
-    // as that would re-trigger the bulk auto-markRead timer on all other unread alerts.
-    const actionsDiv = document.querySelector(`[data-actions-for="${notifId}"]`);
-    if (actionsDiv) {
-      actionsDiv.innerHTML = `<span style="font-size:.72rem;color:var(--mu)">${label}</span>`;
+    if (existing) {
+      await apiFetch('/decisions/' + existing.id, { method: 'PATCH', body: JSON.stringify({ decision_type: type }) });
+    } else {
+      await apiFetch('/decisions/', { method: 'POST', body: JSON.stringify(
+        { notification_id: id, decision_type: type, ...(type === 'DEFERRED' ? { remind_in_minutes: 120 } : {}) }) });
     }
-    const card = document.querySelector(`[data-notif-id="${notifId}"]`);
-    if (card) card.style.opacity = '0.6';
+    toast(type === 'DEFERRED' ? 'We\'ll remind you in 2 hours' : 'Noted — skipped.');
+    refreshAlertViews();
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
+}
 
-    // Mark only this one notification as read.
-    apiFetch('/notifications/' + notifId + '/read', { method: 'POST' }).catch(() => {});
-    refreshNotifBadge();
-  } catch (e) { toast('Error: ' + e.message, 'error'); }
+// ── "What did you do?" sheet ──
+let _reportFor = null, _reportRating = 0;
+
+function openReportSheet(id) {
+  const n = _notifCache[id];
+  if (!n) return;
+  openAlert(id);
+  _reportFor = id; _reportRating = n.decision?.user_satisfaction || 0;
+  const presets = ACTION_PRESETS[n.appliance_key] || ACTION_PRESETS._default;
+  document.getElementById('rs-title').textContent = n.title;
+  document.getElementById('rs-presets').innerHTML =
+    presets.map(p => `<button type="button" class="filter-pill rs-preset">${esc(p)}</button>`).join('');
+  document.getElementById('rs-action').value = n.decision?.action_taken || '';
+  document.getElementById('rs-feedback').value = n.decision?.user_feedback_text || '';
+  renderStars();
+  document.getElementById('report-sheet').classList.add('open');
+}
+
+function closeReportSheet() {
+  document.getElementById('report-sheet').classList.remove('open');
+  _reportFor = null;
+}
+
+function renderStars() {
+  document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5]
+    .map(i => `<button type="button" class="star${i <= _reportRating ? ' on' : ''}" data-star="${i}" aria-label="${i} of 5">★</button>`).join('');
+}
+
+document.getElementById('report-sheet').addEventListener('click', e => {
+  if (e.target.id === 'report-sheet' || e.target.closest('#rs-cancel')) { closeReportSheet(); return; }
+  const preset = e.target.closest('.rs-preset');
+  if (preset) {
+    document.querySelectorAll('.rs-preset').forEach(b => b.classList.remove('active'));
+    preset.classList.add('active');
+    document.getElementById('rs-action').value = preset.textContent;
+    return;
+  }
+  const star = e.target.closest('[data-star]');
+  if (star) { _reportRating = Number(star.dataset.star) === _reportRating ? 0 : Number(star.dataset.star); renderStars(); return; }
+  if (e.target.closest('#rs-save')) submitReport();
+});
+
+async function submitReport() {
+  const id = _reportFor;
+  const n = _notifCache[id];
+  if (!n) return;
+  const action = document.getElementById('rs-action').value.trim();
+  const feedback = document.getElementById('rs-feedback').value.trim();
+  const presets = ACTION_PRESETS[n.appliance_key] || ACTION_PRESETS._default;
+  // A suggested action is ACCEPTED; something the user typed themselves is their own action.
+  const type = action && !presets.includes(action) ? 'CUSTOM_ACTION' : 'ACCEPTED';
+  const body = {
+    ...(action ? { action_taken: action } : {}),
+    ...(feedback ? { user_feedback_text: feedback } : {}),
+    ...(_reportRating ? { user_satisfaction: _reportRating } : {}),
+  };
+  const btn = document.getElementById('rs-save');
+  btn.disabled = true;
+  try {
+    const existing = n.decision;
+    if (existing) {
+      const alreadyDone = ['ACCEPTED', 'CUSTOM_ACTION'].includes(existing.decision_type);
+      const patch = alreadyDone ? body : { decision_type: type, ...body };
+      if (!Object.keys(patch).length) { closeReportSheet(); return; }
+      await apiFetch('/decisions/' + existing.id, { method: 'PATCH', body: JSON.stringify(patch) });
+    } else {
+      await apiFetch('/decisions/', { method: 'POST', body: JSON.stringify({ notification_id: id, decision_type: type, ...body }) });
+    }
+    closeReportSheet();
+    toast('Thanks — we\'ll measure the effect over the next 2 hours.');
+    refreshAlertViews();
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function refreshAlertViews() {
+  if (_activeSection === 'notifications') loadNotifications();
+  if (_activeSection === 'home') loadAlertPreview();
+  refreshNotifBadge();
+}
+
+// Deep link (?notification=<id>, set by the Android notification tap): open that alert.
+function focusPendingAlert(notifs) {
+  if (!_pendingFocusId) return;
+  const id = _pendingFocusId;
+  const card = document.querySelector(`#notif-list [data-notif-id="${id}"]`);
+  if (!card) {
+    // It may be in the other sub-tab (a message from the team rather than a rule alert).
+    if (!focusPendingAlert._switched) {
+      focusPendingAlert._switched = true;
+      switchNotifCategory(nCategory === 'alerts' ? 'notifications' : 'alerts');
+    } else { _pendingFocusId = null; focusPendingAlert._switched = false; }
+    return;
+  }
+  _pendingFocusId = null; focusPendingAlert._switched = false;
+  card.classList.add('focus');
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  openAlert(id);
+  setTimeout(() => card.classList.remove('focus'), 4000);
+}
+
+// Kept for older inline callers.
+function recordDecision(notifId, type) {
+  return type === 'ACCEPTED' ? openReportSheet(notifId) : quickDecision(notifId, type);
+}
+
+// ── Usage events (what the user looked at) ────────────────────
+const _sessionId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).slice(0, 36);
+const SECTION_EVENTS = { home: 'VIEW_DASHBOARD', devices: 'VIEW_DEVICE', ranking: 'VIEW_RANKING', energy: 'VIEW_REPORT' };
+function track(type, screen, extra) {
+  if (!token) return;
+  fetch(API + '/interactions/', {
+    method: 'POST', keepalive: true,
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ interaction_type: type, screen_name: screen || null, session_id: _sessionId, ...(extra || {}) }),
+  }).catch(() => {});
 }
 
 // ── GOALS ─────────────────────────────────────────────────────
@@ -1659,23 +1908,33 @@ async function loadGoals() {
     const goals = await apiFetch('/goals/');
     const el = document.getElementById('goals-list');
     if (!goals?.length) { el.innerHTML = '<div class="empty">No goals set. Create one above!</div>'; return; }
-    el.innerHTML = goals.map(g => {
-      const pct = Math.min(((g.current_kwh || 0) / g.target_kwh) * 100, 100);
-      const cls = pct >= 100 ? 'over' : pct >= 80 ? 'warn' : '';
-      const status = pct >= 100 ? 'pill-r' : pct >= 80 ? 'pill-a' : 'pill-g';
-      const label = pct >= 100 ? 'Over limit' : pct >= 80 ? 'Near limit' : 'On track';
+    // Progress is computed server-side for the goal's current period (this week / month / today).
+    const progress = await Promise.all(goals.map(g => apiFetch('/goals/' + g.id + '/progress').catch(() => null)));
+    const deviceNames = {};
+    document.querySelectorAll('#g-device option').forEach(o => { if (o.value) deviceNames[o.value] = o.textContent; });
+    el.innerHTML = goals.map((g, i) => {
+      const p = progress[i] || {};
+      const used = Number(p.current_kwh || 0);
+      const rawPct = Number(p.percentage_used || 0);
+      const pct = Math.min(rawPct, 100);
+      const cls = rawPct >= 100 ? 'over' : rawPct >= 80 ? 'warn' : '';
+      const status = rawPct >= 100 ? 'pill-r' : rawPct >= 80 ? 'pill-a' : 'pill-g';
+      const label = rawPct >= 100 ? 'Over limit' : rawPct >= 80 ? 'Near limit' : 'On track';
+      const scope = g.device_id ? (deviceNames[g.device_id] || 'Device #' + g.device_id) : 'Whole home';
+      const period = p.period_start ? `${esc(p.period_start)} → ${esc(p.period_end)}` : 'Started ' + esc(g.start_date);
+      const left = p.days_remaining != null ? ` · ${p.days_remaining} day${p.days_remaining === 1 ? '' : 's'} left` : '';
       return `<div class="card">
         <div class="card-hdr">
           <div>
-            <div style="font-weight:600">${g.goal_type.charAt(0).toUpperCase() + g.goal_type.slice(1)} · ${g.target_kwh} kWh</div>
-            <div style="font-size:.72rem;color:var(--mu);margin-top:2px">Started ${san(g.start_date)} · ${g.device_id ? 'Device #' + g.device_id : 'Whole home'}</div>
+            <div style="font-weight:600">${esc(g.goal_type.charAt(0).toUpperCase() + g.goal_type.slice(1))} · ${esc(g.target_kwh)} kWh · ${esc(scope)}</div>
+            <div style="font-size:.72rem;color:var(--mu);margin-top:2px">${period}${left}</div>
           </div>
           <span class="pill ${status}">${label}</span>
         </div>
         <div class="prog-wrap"><div class="prog ${cls}" style="width:${pct}%"></div></div>
         <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--mu);margin-top:4px">
-          <span>${(g.current_kwh || 0).toFixed(2)} kWh used</span>
-          <span>${pct.toFixed(0)}% of goal</span>
+          <span>${used.toFixed(2)} kWh used${p.projected_kwh != null && rawPct < 100 ? ' · on course for ' + Number(p.projected_kwh).toFixed(2) : ''}</span>
+          <span>${rawPct.toFixed(0)}% of goal</span>
         </div>
       </div>`;
     }).join('');
@@ -1736,7 +1995,7 @@ async function loadRanking() {
   try {
     const decs = await apiFetch('/decisions/?limit=5');
     document.getElementById('decisions-history').innerHTML = decs?.length
-      ? decs.map(d => `<div class="dec-row"><span class="dec-type dec-${d.decision_type}">${d.decision_type}</span><span style="flex:1">${san(d.recommendation_text || 'Decision recorded')}</span><span style="font-size:.72rem;color:var(--mu)">${new Date(d.created_at).toLocaleDateString('en-GB')}</span></div>`).join('')
+      ? decs.map(d => `<div class="dec-row"><span class="dec-type dec-${esc(d.decision_type)}">${esc(d.decision_type.replace('_', ' '))}</span><span style="flex:1">${esc(d.notification_title || 'Alert no longer available')}${d.action_taken ? `<div class="dec-note">“${esc(d.action_taken)}”</div>` : ''}${d.energy_saved_kwh != null && d.impact_calculated_at ? `<div class="dec-impact${d.energy_saved_kwh > 0.0005 ? ' good' : ''}">${d.energy_saved_kwh > 0.0005 ? 'Saved ' + Number(d.energy_saved_kwh).toFixed(3) + ' kWh' : 'No measurable saving'}</div>` : ''}</span><span style="font-size:.72rem;color:var(--mu)">${new Date(d.created_at).toLocaleDateString('en-GB')}</span></div>`).join('')
       : '<div class="empty">No decisions yet</div>';
   } catch {}
 
@@ -1782,20 +2041,10 @@ async function loadSettings() {
   if (userData.daily_energy_goal_kwh) document.getElementById('goal-display').textContent = userData.daily_energy_goal_kwh + ' kWh/day';
   if (userData.monthly_budget_gbp) document.getElementById('budget-display').textContent = '£' + userData.monthly_budget_gbp;
 
-  // Load persona
-  if (userData.persona_id) {
-    try {
-      // Fetch personas to find the name
-      const personas = await apiFetch('/analysis/personas').catch(() => null);
-      if (personas) {
-        const p = personas.find(px => px.id === userData.persona_id);
-        if (p) {
-          const chip = document.getElementById('persona-settings-chip');
-          chip.textContent = p.name;
-          chip.style.display = 'inline-flex';
-        }
-      }
-    } catch {}
+  // Persona (assigned by the classifier; comes with the profile)
+  if (userData.persona_name) {
+    const chip = document.getElementById('persona-settings-chip');
+    if (chip) { chip.textContent = userData.persona_name; chip.style.display = 'inline-flex'; }
   }
 }
 
@@ -1803,8 +2052,11 @@ async function saveGoalSetting() {
   const val = parseFloat(document.getElementById('daily-goal-input').value);
   if (!val || val <= 0) { toast('Enter a valid kWh value', 'error'); return; }
   try {
-    await apiFetch('/goals/', { method: 'POST', body: JSON.stringify({ goal_type: 'daily', target_kwh: val, start_date: new Date().toISOString().split('T')[0] }) });
+    // The whole-home daily target lives on the profile: it drives the daily alert and the ranking's goal score.
+    await apiFetch('/auth/profile', { method: 'PATCH', body: JSON.stringify({ daily_energy_goal_kwh: val }) });
+    if (userData) userData.daily_energy_goal_kwh = val;
     document.getElementById('goal-display').textContent = val + ' kWh/day';
+    track('CHANGE_SETTINGS', 'settings', { metadata: { field: 'daily_energy_goal_kwh' } });
     toast('Daily goal saved! 🎯');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 }

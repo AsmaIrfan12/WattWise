@@ -132,6 +132,244 @@ function doLogout() {
   location.reload();
 }
 
+
+// ── Cohort (real / synthetic / all) ───────────────────────────
+// Real participants and synthetic demo accounts are never mixed unless "All" is chosen.
+let _cohort = sessionStorage.getItem('ww_admin_cohort') || 'real';
+const COHORT_LABELS = { real: 'real participants', synthetic: 'synthetic demo accounts', all: 'all accounts' };
+function cohortQS(prefix = '&') { return `${prefix}cohort=${_cohort}`; }
+function paintCohortLabels() {
+  document.querySelectorAll('[data-cohort-label]').forEach(el => { el.textContent = `· ${COHORT_LABELS[_cohort]}`; });
+  const sw = document.getElementById('cohort-switch');
+  if (sw) sw.value = _cohort;
+}
+
+function h(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtWhen(iso) {
+  if (!iso) return '—';
+  return new Date(String(iso).endsWith('Z') ? iso : iso + 'Z').toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
+}
+function fmtDuration(s) {
+  if (s == null) return '—';
+  if (s < 90) return `${Math.round(s)} s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  return `${(s / 3600).toFixed(1)} h`;
+}
+const DECISION_LABELS = { ACCEPTED: '✅ Done', CUSTOM_ACTION: '✍️ Own action', DEFERRED: '⏰ Later', REJECTED: '❌ Skipped' };
+
+// ── Decisions section ─────────────────────────────────────────
+function loadDecisionsSection() {
+  paintCohortLabels();
+  loadFunnel();
+  loadCampaigns();
+  loadDecisionExplorer(1);
+}
+
+async function loadFunnel() {
+  const kpis = document.getElementById('funnel-kpis');
+  const tbody = document.getElementById('funnel-tbody');
+  try {
+    const days = document.getElementById('funnel-days').value;
+    const source = document.getElementById('funnel-source').value;
+    const f = await api(`/api/admin/notifications/funnel?days=${days}${cohortQS()}${source ? '&source=' + source : ''}`);
+    const o = f.overall;
+    const stat = (v, l) => `<div class="impact-stat"><div class="impact-val">${v}</div><div class="impact-lbl">${l}</div></div>`;
+    kpis.innerHTML =
+      stat(o.sent, 'Alerts sent') + stat(o.opened, 'Opened') + stat(o.actionable, 'Asked for a response') +
+      stat(o.decided, 'Responded') + stat(o.no_response, 'No response') +
+      stat(o.response_rate == null ? '—' : o.response_rate + '%', 'Response rate') +
+      stat(o.measured, 'Impact measured') + stat((o.saved_kwh || 0).toFixed(2), 'kWh saved');
+    tbody.innerHTML = f.by_type.length ? f.by_type.map(r => `<tr>
+        <td>${h(r.notification_type)}</td><td>${r.source === 'ADMIN' ? 'Admin' : 'Automated'}</td>
+        <td>${r.sent}</td><td>${r.opened}</td><td>${r.actionable}</td><td>${r.decided}</td>
+        <td>${r.accepted + r.custom_action}</td><td>${r.deferred}</td><td>${r.rejected}</td>
+        <td>${r.response_rate == null ? '—' : r.response_rate + '%'}</td>
+        <td>${fmtDuration(r.avg_response_time_seconds)}</td><td>${(r.saved_kwh || 0).toFixed(2)}</td></tr>`).join('')
+      : '<tr><td colspan="12" class="loading-row">No alerts in this period for this cohort</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="12" class="loading-row">Error: ${h(err.message)}</td></tr>`;
+  }
+}
+
+function describeTarget(t) {
+  if (!t) return 'Everyone';
+  if (t.user_ids?.length) return `${t.user_ids.length} user(s)`;
+  if (t.home_ids?.length) return `${t.home_ids.length} home(s)`;
+  const who = t.target_persona_id ? `persona #${t.target_persona_id}` : 'everyone';
+  const cohort = t.cohort && t.cohort !== 'all' ? ` · ${t.cohort}` : '';
+  return who + cohort + (t.appliance_key ? ` · ${t.appliance_key}` : '');
+}
+
+async function loadCampaigns() {
+  const tbody = document.getElementById('campaigns-tbody');
+  try {
+    const res = await api(`/api/admin/campaigns?limit=50${cohortQS()}`);
+    const list = res.campaigns || [];
+    tbody.innerHTML = list.length ? list.map(c => {
+      const f = c.funnel || {};
+      const when = c.status === 'SCHEDULED' ? 'Scheduled ' + fmtWhen(c.send_at) : fmtWhen(c.sent_at || c.created_at);
+      return `<tr class="row-click" data-campaign="${c.id}">
+        <td>${when}</td><td>${h(c.title)}${c.requires_user_action ? ' <span class="tag-sim">asks for response</span>' : ''}</td>
+        <td>${h(describeTarget(c.target))}</td><td>${h(c.status)}</td>
+        <td>${c.notifications_created}</td><td>${f.opened ?? '—'}</td><td>${f.decided ?? '—'}</td><td>${f.no_response ?? '—'}</td>
+        <td>${f.response_rate == null ? '—' : f.response_rate + '%'}</td>
+        <td>${c.status === 'SCHEDULED' ? `<button class="btn-sm btn-outline" data-cancel-campaign="${c.id}">Cancel</button>` : '<span style="color:#9ca3af">View ▸</span>'}</td></tr>`;
+    }).join('') : '<tr><td colspan="10" class="loading-row">No admin sends yet — use the Notifications tab</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="10" class="loading-row">Error: ${h(err.message)}</td></tr>`;
+  }
+}
+
+async function showCampaign(id) {
+  const box = document.getElementById('campaign-detail');
+  box.style.display = 'block';
+  box.innerHTML = '<div class="loading-row">Loading recipients…</div>';
+  try {
+    const d = await api(`/api/admin/campaigns/${id}?cohort=${_cohort}`);
+    const c = d.campaign, sc = d.status_counts;
+    const rows = d.recipients.map(r => {
+      const dec = r.decision;
+      return `<tr>
+        <td>${h(r.user_name)}${r.is_synthetic ? ' <span class="tag-sim">synthetic</span>' : ''}<div class="dx-note">${h(r.user_email)}</div></td>
+        <td>${h(r.status)}</td><td>${fmtWhen(r.opened_at)}</td>
+        <td>${dec ? (DECISION_LABELS[dec.decision_type] || h(dec.decision_type)) : '—'}${dec?.is_simulated ? ' <span class="tag-sim">simulated</span>' : ''}</td>
+        <td>${dec?.action_taken ? h(dec.action_taken) : '—'}${dec?.user_feedback_text ? `<div class="dx-note">“${h(dec.user_feedback_text)}”</div>` : ''}</td>
+        <td>${dec?.user_satisfaction ? '★'.repeat(dec.user_satisfaction) : '—'}</td>
+        <td>${dec ? fmtDuration(dec.response_time_seconds) : '—'}</td>
+        <td>${dec?.energy_saved_kwh != null ? Number(dec.energy_saved_kwh).toFixed(3) : '—'}</td></tr>`;
+    }).join('');
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <div><strong>${h(c.title)}</strong><div class="dx-note" style="max-width:none">${h(c.message)}</div></div>
+        <div style="font-size:12px;color:#9ca3af">${sc.delivered} not seen · ${sc.seen} seen · ${sc.opened} opened · ${sc.decided} responded</div>
+      </div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Recipient</th><th>Status</th><th>Opened</th><th>Decision</th><th>What they did</th><th>Rating</th><th>Response time</th><th>kWh saved</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" class="loading-row">No recipients in this cohort</td></tr>'}</tbody></table></div>`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) { box.innerHTML = `<div class="loading-row">Error: ${h(err.message)}</div>`; }
+}
+
+function decisionFilterQS() {
+  const v = id => document.getElementById(id).value;
+  let qs = `cohort=${_cohort}`;
+  if (v('dx-type')) qs += `&decision_type=${v('dx-type')}`;
+  if (v('dx-source')) qs += `&source=${v('dx-source')}`;
+  if (v('dx-measured') !== 'any') qs += `&measured=${v('dx-measured')}`;
+  if (v('dx-from')) qs += `&date_from=${v('dx-from')}`;
+  if (v('dx-to')) qs += `&date_to=${v('dx-to')}`;
+  if (v('dx-user')) qs += `&user_id=${parseInt(v('dx-user'), 10)}`;
+  return qs;
+}
+
+async function loadDecisionExplorer(page = 1) {
+  const tbody = document.getElementById('dx-tbody');
+  const pager = document.getElementById('dx-pager');
+  try {
+    const limit = 25;
+    const res = await api(`/api/admin/decisions?${decisionFilterQS()}&page=${page}&limit=${limit}`);
+    tbody.innerHTML = res.items.length ? res.items.map(r => `<tr>
+        <td>${fmtWhen(r.decided_at)}</td>
+        <td>${h(r.user_name)}${r.is_synthetic ? ' <span class="tag-sim">synthetic</span>' : ''}<div class="dx-note">${h(r.persona || '')}</div></td>
+        <td>${h(r.alert_title || '(alert removed)')}<div class="dx-note">${h(r.alert_type || '')}${r.alert_source === 'ADMIN' ? ' · admin send' : ''}${r.alert_opened_at ? ' · opened ' + fmtWhen(r.alert_opened_at) : ''}</div></td>
+        <td>${h(r.device_name || (r.impact_scope === 'home' ? 'Whole home' : '—'))}</td>
+        <td>${DECISION_LABELS[r.decision_type] || h(r.decision_type)}${r.is_simulated ? ' <span class="tag-sim">simulated</span>' : ''}</td>
+        <td>${r.action_taken ? h(r.action_taken) : '—'}${r.user_feedback_text ? `<div class="dx-note">“${h(r.user_feedback_text)}”</div>` : ''}</td>
+        <td>${r.user_satisfaction ? '★'.repeat(r.user_satisfaction) : '—'}</td>
+        <td>${fmtDuration(r.response_time_seconds)}</td>
+        <td>${r.energy_saved_kwh != null ? Number(r.energy_saved_kwh).toFixed(3) : (r.impact_scope === 'none' ? 'n/a' : 'pending')}</td>
+        <td>${r.effectiveness_score != null ? Math.round(r.effectiveness_score) + '%' : '—'}</td></tr>`).join('')
+      : `<tr><td colspan="10" class="loading-row">No decisions match for ${COHORT_LABELS[_cohort]}</td></tr>`;
+    const pages = Math.max(1, Math.ceil(res.total / limit));
+    pager.innerHTML = `<span>${res.total} decision(s)</span>
+      <button class="btn-sm btn-outline" data-dx-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>‹ Prev</button>
+      <span>Page ${page} of ${pages}</span>
+      <button class="btn-sm btn-outline" data-dx-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Next ›</button>`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="10" class="loading-row">Error: ${h(err.message)}</td></tr>`;
+  }
+}
+
+async function exportDecisionsCsv() {
+  try {
+    const res = await fetch(`${API_BASE}/api/admin/decisions?${decisionFilterQS()}&format=csv`, { headers: { Authorization: `Bearer ${_token}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (res.headers.get('Content-Disposition') || '').match(/filename="?([^"]+)"?/)?.[1] || 'wattwise-decisions.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    toast('Decisions exported', 'success');
+  } catch (err) { toast('Export failed: ' + err.message, 'error'); }
+}
+
+function initDecisionsUi() {
+  paintCohortLabels();
+  document.getElementById('cohort-switch').addEventListener('change', e => {
+    _cohort = e.target.value;
+    sessionStorage.setItem('ww_admin_cohort', _cohort);
+    paintCohortLabels();
+    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'dashboard';
+    navigateTo(active);
+  });
+  document.getElementById('funnel-days').addEventListener('change', loadFunnel);
+  document.getElementById('funnel-source').addEventListener('change', loadFunnel);
+  document.getElementById('btn-reload-campaigns').addEventListener('click', loadCampaigns);
+  document.getElementById('btn-dx-apply').addEventListener('click', () => loadDecisionExplorer(1));
+  document.getElementById('btn-dx-export').addEventListener('click', exportDecisionsCsv);
+  document.getElementById('dx-pager').addEventListener('click', e => {
+    const b = e.target.closest('[data-dx-page]');
+    if (b && !b.disabled) loadDecisionExplorer(parseInt(b.dataset.dxPage, 10));
+  });
+  document.getElementById('campaigns-tbody').addEventListener('click', async e => {
+    const cancel = e.target.closest('[data-cancel-campaign]');
+    if (cancel) {
+      e.stopPropagation();
+      try { await api(`/api/admin/campaigns/${cancel.dataset.cancelCampaign}/cancel`, { method: 'POST' }); toast('Scheduled send cancelled', 'success'); loadCampaigns(); }
+      catch (err) { toast('Cancel failed: ' + err.message, 'error'); }
+      return;
+    }
+    const row = e.target.closest('[data-campaign]');
+    if (row) showCampaign(parseInt(row.dataset.campaign, 10));
+  });
+  document.getElementById('notif-requires-action').addEventListener('change', e => {
+    document.getElementById('notif-action-fields').style.display = e.target.checked ? 'block' : 'none';
+  });
+  document.getElementById('btn-notif-save-template').addEventListener('click', saveNotifTemplate);
+  // Users table actions (delegated — no user-supplied text is ever placed inside a JS handler)
+  document.getElementById('users-tbody').addEventListener('click', e => {
+    const btn = e.target.closest('[data-user-act]');
+    if (!btn) return;
+    const uid = parseInt(btn.dataset.uid, 10);
+    if (btn.dataset.userAct === 'details') openUserPanel(uid);
+    else if (btn.dataset.userAct === 'toggle') toggleUserNotif(uid);
+    else if (btn.dataset.userAct === 'drill') toggleUserDrill(uid, btn.dataset.name || '', btn);
+  });
+}
+
+async function saveNotifTemplate() {
+  const title = document.getElementById('notif-title').value.trim();
+  const message = document.getElementById('notif-message').value.trim();
+  if (!title || !message) { toast('Fill in the title and message first', 'error'); return; }
+  const name = prompt('Template name:', title.slice(0, 60));
+  if (!name) return;
+  try {
+    await api('/api/admin/notifications/templates', { method: 'POST', body: JSON.stringify({
+      name, title_template: title, message_template: message,
+      notification_type: document.getElementById('notif-type').value,
+      severity: document.getElementById('notif-severity').value,
+      requires_user_action: document.getElementById('notif-requires-action').checked,
+      action_hint: document.getElementById('notif-action-hint').value.trim() || null,
+      action_button_text: document.getElementById('notif-button-text').value.trim() || null,
+    }) });
+    toast('Template saved', 'success');
+    loadTemplates();
+  } catch (err) { toast('Could not save template: ' + err.message, 'error'); }
+}
+
 // ── Navigation ──────────────────────────────────────────────
 function navigateTo(section) {
   document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
@@ -144,7 +382,7 @@ function navigateTo(section) {
   const titles = {
     dashboard: 'Dashboard', users: 'User Management', personas: 'Persona Groups',
     rankings: 'Community Rankings', analytics: 'Analytics', devices: 'Device Status',
-    notifications: 'Notifications', backup: 'Backups', audit: 'Audit Log',
+    notifications: 'Notifications', decisions: 'Decisions & Responses', backup: 'Backups', audit: 'Audit Log',
   };
   document.getElementById('page-title').textContent = titles[section] || section;
 
@@ -157,6 +395,7 @@ function navigateTo(section) {
     case 'analytics': loadAnalytics(); loadSankey(); break;
     case 'devices': loadDevices(); loadMqttBrokerStats(); break;
     case 'notifications': loadTemplates(); loadNotifBreakdown(); break;
+    case 'decisions': loadDecisionsSection(); break;
     case 'backup': loadBackups(); break;
     case 'audit': /* manual load */ break;
   }
@@ -295,7 +534,7 @@ async function loadDashboard() {
 
     const [dash, decisions, energy] = await Promise.all([
       api('/api/admin/dashboard'),
-      api('/api/admin/analytics/decisions'),
+      api(`/api/admin/analytics/decisions?cohort=${_cohort}`),
       api(`/api/admin/analytics/energy?${period.query}`),
     ]);
 
@@ -315,8 +554,10 @@ async function loadDashboard() {
       document.getElementById('di-total').textContent = decisions.total_decisions ?? '—';
       document.getElementById('di-saved-kwh').textContent = `${(decisions.total_energy_saved_kwh || 0).toFixed(1)} kWh`;
       document.getElementById('di-saved-gbp').textContent = `£${(decisions.total_cost_saved_gbp || 0).toFixed(2)}`;
-      document.getElementById('di-effectiveness').textContent = decisions.avg_effectiveness_score ? `${decisions.avg_effectiveness_score.toFixed(0)}%` : '—%';
-      document.getElementById('di-response-time').textContent = decisions.avg_response_time_seconds ? `${Math.round(decisions.avg_response_time_seconds)}s` : '—s';
+      document.getElementById('di-effectiveness').textContent = decisions.avg_effectiveness_score != null ? `${decisions.avg_effectiveness_score.toFixed(0)}%` : '—%';
+      document.getElementById('di-response-time').textContent = decisions.avg_response_time_seconds != null ? fmtDuration(decisions.avg_response_time_seconds) : '—';
+      document.getElementById('di-split').textContent = `${(decisions.accepted || 0) + (decisions.custom_action || 0)} / ${decisions.deferred || 0} / ${decisions.rejected || 0}`;
+      paintCohortLabels();
     }
 
     if (energy?.length) {
@@ -801,7 +1042,7 @@ async function loadUsers(page = 1) {
   tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
 
   try {
-    let url = `/api/admin/users?page=${page}&limit=20`;
+    let url = `/api/admin/users?page=${page}&limit=20&cohort=${_cohort}`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
     if (personaId) url += `&persona_id=${personaId}`;
     const users = await api(url);
@@ -812,19 +1053,19 @@ async function loadUsers(page = 1) {
     }
 
     tbody.innerHTML = users.map(u => {
-      const pc = _personaBadgeClass[u.persona?.name] || 'diseng';
+      const pc = _personaBadgeClass[u.persona_name] || 'diseng';
       return `
         <tr data-user-id="${u.id}">
           <td><input type="checkbox" class="user-checkbox" data-uid="${u.id}" ${_selectedUserIds.has(u.id) ? 'checked' : ''}/></td>
-          <td>${DOMPurify.sanitize(u.name)}</td>
-          <td>${DOMPurify.sanitize(u.email)}</td>
-          <td>${u.persona_id ? `<span class="badge badge-${pc}">${DOMPurify.sanitize(u.persona?.name || 'Assigned')}</span>` : '<span class="badge badge-diseng">None</span>'}</td>
-          <td>${u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('en-GB') : '—'}</td>
+          <td>${h(u.name)}${u.is_synthetic ? ' <span class="tag-sim">synthetic</span>' : ''}</td>
+          <td>${h(u.email)}</td>
+          <td>${u.persona_name ? `<span class="badge badge-${pc}">${h(u.persona_name)}</span>` : '<span class="badge badge-diseng">None</span>'}</td>
+          <td>${u.last_login_at ? new Date(u.last_login_at + 'Z').toLocaleDateString('en-GB') : '—'}</td>
           <td><span class="badge badge-${u.notifications_enabled ? 'enabled' : 'disabled'}">${u.notifications_enabled ? '✓ On' : '✗ Off'}</span></td>
           <td>
-            <button class="btn-sm btn-outline" onclick="openUserPanel(${u.id})">Details</button>
-            <button class="btn-sm btn-outline" onclick="toggleUserNotif(${u.id})">Toggle Notif</button>
-            <button class="btn-sm" title="Inline insights" onclick="toggleUserDrill(${u.id}, '${(u.name || '').replace(/'/g, '\\\'')}', this)">🔍</button>
+            <button class="btn-sm btn-outline" data-user-act="details" data-uid="${u.id}">Details</button>
+            <button class="btn-sm btn-outline" data-user-act="toggle" data-uid="${u.id}">Toggle Notif</button>
+            <button class="btn-sm" title="Inline insights" data-user-act="drill" data-uid="${u.id}" data-name="${h(u.name)}">🔍</button>
           </td>
         </tr>`;
     }).join('');
@@ -880,7 +1121,7 @@ async function openUserPanel(userId) {
     body.innerHTML = `
       <div class="detail-section">
         <div class="detail-section-title">Profile</div>
-        <div class="detail-row"><span class="detail-key">Name</span><span class="detail-val">${DOMPurify.sanitize(u.name)}</span></div>
+        <div class="detail-row"><span class="detail-key">Name</span><span class="detail-val">${h(u.name)}${u.is_synthetic ? ' <span class="tag-sim">synthetic</span>' : ''}</span></div>
         <div class="detail-row"><span class="detail-key">Email</span><span class="detail-val">${DOMPurify.sanitize(u.email)}</span></div>
         <div class="detail-row"><span class="detail-key">Joined</span><span class="detail-val">${new Date(u.created_at).toLocaleDateString('en-GB')}</span></div>
         <div class="detail-row"><span class="detail-key">Last Login</span><span class="detail-val">${u.last_login ? new Date(u.last_login).toLocaleString('en-GB') : '—'}</span></div>
@@ -899,6 +1140,9 @@ async function openUserPanel(userId) {
       <div class="detail-section">
         <div class="detail-section-title">Decision Impact</div>
         <div class="detail-row"><span class="detail-key">Total Decisions</span><span class="detail-val">${d.decision_impact?.total_decisions ?? '—'}</span></div>
+        <div class="detail-row"><span class="detail-key">Done / Later / Skipped</span><span class="detail-val">${d.decision_impact?.accepted ?? 0} / ${d.decision_impact?.deferred ?? 0} / ${d.decision_impact?.rejected ?? 0}</span></div>
+        <div class="detail-row"><span class="detail-key">Avg Response Time</span><span class="detail-val">${fmtDuration(d.decision_impact?.avg_response_time_seconds)}</span></div>
+        <div class="detail-row"><span class="detail-key">Avg Rating</span><span class="detail-val">${d.decision_impact?.avg_satisfaction ?? '—'}</span></div>
         <div class="detail-row"><span class="detail-key">Energy Saved</span><span class="detail-val" style="color:var(--success)">${d.decision_impact?.total_energy_saved_kwh ?? 0} kWh</span></div>
         <div class="detail-row"><span class="detail-key">Cost Saved</span><span class="detail-val" style="color:var(--success)">£${d.decision_impact?.total_cost_saved_gbp ?? 0}</span></div>
         <div class="detail-row"><span class="detail-key">Avg Effectiveness</span><span class="detail-val">${d.decision_impact?.avg_effectiveness_score ? `${d.decision_impact.avg_effectiveness_score}%` : '—'}</span></div>
@@ -906,7 +1150,16 @@ async function openUserPanel(userId) {
 
       <div class="detail-section">
         <div class="detail-section-title">Homes</div>
-        ${d.homes?.map(h => `<div class="detail-row"><span class="detail-key">${DOMPurify.sanitize(h.name)}</span><span class="detail-val">${h.home_type} · ${h.num_occupants} occupant(s)</span></div>`).join('') || '<div class="detail-row"><span class="detail-key">No homes registered</span></div>'}
+        ${d.homes?.map(hm => `<div class="detail-row"><span class="detail-key">${h(hm.name)} <span style="color:#9ca3af">#${hm.id}</span></span><span class="detail-val">${h(hm.home_type)} · ${h(hm.num_occupants)} occupant(s)</span></div>
+          <div class="dx-note" style="max-width:none;margin:-2px 0 6px">${(hm.devices || []).map(dv => h(dv.name)).join(', ') || 'No devices'}</div>`).join('') || '<div class="detail-row"><span class="detail-key">No homes registered</span></div>'}
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Recent alerts and responses</div>
+        ${(d.recent_notifications || []).map(n => `<div class="detail-row" style="align-items:flex-start">
+            <span class="detail-key" style="max-width:62%">${h(n.title)}<div class="dx-note">${fmtWhen(n.created_at)} · ${n.source === 'ADMIN' ? 'admin send' : h(n.type)}${n.opened_at ? ' · opened' : n.read ? ' · seen' : ' · not seen'}</div></span>
+            <span class="detail-val" style="text-align:right">${n.decision ? (DECISION_LABELS[n.decision.decision_type] || h(n.decision.decision_type)) + (n.decision.is_simulated ? ' <span class="tag-sim">simulated</span>' : '') : (n.requires_user_action ? '<span style="color:#f59e0b">no response</span>' : '—')}${n.decision?.action_taken ? `<div class="dx-note">${h(n.decision.action_taken)}</div>` : ''}</span>
+          </div>`).join('') || '<div class="detail-row"><span class="detail-key">No alerts yet</span></div>'}
       </div>
 
       <div class="detail-section">
@@ -1445,11 +1698,17 @@ async function loadTemplates() {
   try {
     const templates = await api('/api/admin/notifications/templates');
     if (!templates?.length) { el.innerHTML = '<div class="loading-row">No templates yet</div>'; return; }
-    el.innerHTML = templates.map(t => `
-      <div class="template-item" onclick="applyTemplate(${JSON.stringify(t).replace(/"/g, '&quot;')})">
-        <div class="template-item-title">${DOMPurify.sanitize(t.name)}</div>
-        <div class="template-item-type">${t.notification_type} · ${t.severity}</div>
-      </div>`).join('');
+    el.innerHTML = '';
+    templates.forEach(t => {
+      const item = document.createElement('div');
+      item.className = 'template-item';
+      item.innerHTML = '<div class="template-item-title"></div><div class="template-item-type"></div>';
+      item.querySelector('.template-item-title').textContent = t.name;
+      item.querySelector('.template-item-type').textContent =
+        `${t.notification_type} · ${t.severity}${t.requires_user_action ? ' · asks for response' : ''}`;
+      item.addEventListener('click', () => applyTemplate(t));
+      el.appendChild(item);
+    });
   } catch (err) { el.innerHTML = `<div class="loading-row">Error loading templates</div>`; }
 }
 
@@ -1462,6 +1721,11 @@ function applyTemplate(t) {
   if (msg) msg.value = t.message_template || '';
   if (type) type.value = t.notification_type || 'ADMIN_BROADCAST';
   if (sev) sev.value = t.severity || 'INFO';
+  const req = document.getElementById('notif-requires-action');
+  req.checked = !!t.requires_user_action;
+  document.getElementById('notif-action-fields').style.display = req.checked ? 'block' : 'none';
+  document.getElementById('notif-action-hint').value = t.action_hint || '';
+  document.getElementById('notif-button-text').value = t.action_button_text || '';
   toast('Template applied', 'info');
 }
 
@@ -1668,6 +1932,7 @@ function _stepRanking(direction) {
 // ── Initialisation ────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
   if (!await checkAuth()) return;
+  initDecisionsUi();
 
   // Navigation
   document.querySelectorAll('.nav-item').forEach(item => {
@@ -1940,13 +2205,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     feedback.className = 'form-feedback';
     try {
       const target = document.getElementById('notif-target').value;
-      const userIdsStr = document.getElementById('notif-user-ids')?.value || '';
-      const userIds = target === 'specific'
-        ? userIdsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
-        : null;
-      const personaId = target === 'persona'
-        ? parseInt(document.getElementById('notif-persona-id')?.value || '0')
-        : null;
+      const ids = (document.getElementById('notif-user-ids')?.value || '')
+        .split(',').map(x => parseInt(x.trim(), 10)).filter(n => !isNaN(n));
+      if ((target === 'specific' || target === 'homes') && !ids.length) throw new Error('Enter at least one ID');
+      const personaId = target === 'persona' ? parseInt(document.getElementById('notif-persona-id')?.value || '0', 10) : null;
+      const requiresAction = document.getElementById('notif-requires-action').checked;
+      const sendAtLocal = document.getElementById('notif-send-at').value;
 
       const res = await api('/api/admin/notifications/send', {
         method: 'POST',
@@ -1955,14 +2219,21 @@ window.addEventListener('DOMContentLoaded', async () => {
           message: document.getElementById('notif-message').value,
           notification_type: document.getElementById('notif-type').value,
           severity: document.getElementById('notif-severity').value,
-          user_ids: userIds,
+          user_ids: target === 'specific' ? ids : null,
+          home_ids: target === 'homes' ? ids : null,
           target_persona_id: personaId || null,
+          cohort: ['real', 'synthetic'].includes(target) ? target : 'all',
+          requires_user_action: requiresAction,
+          action_hint: requiresAction ? (document.getElementById('notif-action-hint').value.trim() || null) : null,
+          action_button_text: requiresAction ? (document.getElementById('notif-button-text').value.trim() || null) : null,
+          appliance_key: requiresAction ? (document.getElementById('notif-appliance').value || null) : null,
+          // The API stores UTC; the picker gives local time.
+          send_at: sendAtLocal ? new Date(sendAtLocal).toISOString().slice(0, 19) : null,
         }),
       });
-      const targetLabel = target === 'persona' && personaId
-        ? ` to persona '${document.getElementById('notif-persona-id').selectedOptions[0]?.text}'`
-        : target === 'specific' ? ' to selected users' : ' to all users';
-      feedback.textContent = `✅ Sent to ${res.notifications_sent} users${targetLabel}`;
+      feedback.textContent = res.status === 'SCHEDULED'
+        ? `🕒 Scheduled for ${fmtWhen(res.send_at)} — see the Decisions tab to cancel`
+        : `✅ Delivered to ${res.notifications_created} of ${res.recipients_targeted} targeted user(s). Responses appear in the Decisions tab.`;
       feedback.className = 'form-feedback success';
     } catch (err) {
       feedback.textContent = `❌ ${err.message}`;
@@ -1972,7 +2243,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('notif-target').addEventListener('change', async e => {
     const extra = document.getElementById('notif-target-extra');
     const personaWrap = document.getElementById('notif-target-persona');
-    extra.style.display = e.target.value === 'specific' ? 'block' : 'none';
+    extra.style.display = ['specific', 'homes'].includes(e.target.value) ? 'block' : 'none';
+    document.getElementById('notif-user-ids').placeholder =
+      e.target.value === 'homes' ? 'Comma-separated home IDs…' : 'Comma-separated user IDs…';
     personaWrap.style.display = e.target.value === 'persona' ? 'block' : 'none';
     if (e.target.value === 'persona') {
       try {
@@ -2028,9 +2301,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Set default analytics dates
   const today = new Date().toISOString().slice(0,10);
   const week = new Date(Date.now() - 7 * 86400000).toISOString().slice(0,10);
-  document.getElementById('analytics-start').value = week;
-  document.getElementById('analytics-end').value = today;
-  document.getElementById('rankings-date').value = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+  // Null-safe: one missing input here used to throw and silently skip everything
+  // below it — including initAdvancedComparison(), which left the comparison tool dead.
+  const setValue = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  setValue('analytics-start', week);
+  setValue('analytics-end', today);
+  setValue('rankings-date', new Date(Date.now() - 86400000).toISOString().slice(0,10));
 
   // Initialize Advanced Comparison UI
   initAdvancedComparison();
@@ -2153,7 +2429,7 @@ async function loadSankey() {
 
     summaryEl.textContent = `${data.node_count} nodes · ${data.link_count} links · total ${data.total_kwh.toLocaleString()} kWh in window`;
   } catch (err) {
-    container.innerHTML = `<div class="loading-row">Failed: ${err.message}</div>`;
+    container.innerHTML = `<div class="loading-row">Failed: ${h(err.message)}</div>`;
     console.warn('Sankey:', err.message);
   }
 }
@@ -2254,7 +2530,7 @@ async function toggleUserDrill(userId, userName, btnEl) {
     }
   } catch (err) {
     document.getElementById(`user-drill-${userId}`).innerHTML =
-      `<div class="loading-row">Error loading insights: ${err.message}</div>`;
+      `<div class="loading-row">Error loading insights: ${h(err.message)}</div>`;
   }
 }
 

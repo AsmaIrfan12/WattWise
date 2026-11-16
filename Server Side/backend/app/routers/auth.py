@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import User, UserInteractionLog
+from app.models import User, UserInteractionLog, Persona
 from app.security import SlidingWindowRateLimiter
 from app.schemas import SignupRequest, LoginRequest, TokenResponse, UserResponse, PushTokenUpdate, ProfileUpdateRequest
 
@@ -47,6 +47,16 @@ def _verify_password(password: str, hashed: str) -> bool:
     except (ValueError, Exception):
         # Fallback: if hashing was just enabled but record is still plaintext
         return password == hashed
+
+
+async def _user_response(db: AsyncSession, user: User) -> UserResponse:
+    """The caller's own profile, including the persona the classifier assigned them."""
+    resp = UserResponse.model_validate(user)
+    if user.persona_id:
+        resp.persona_name = (await db.execute(
+            select(Persona.name).where(Persona.id == user.persona_id)
+        )).scalar_one_or_none()
+    return resp
 
 
 def _create_token(user_id: int, is_admin: bool = False) -> str:
@@ -176,17 +186,7 @@ async def get_me(request: Request, db: AsyncSession = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    return UserResponse(
-        id=user.id,
-        name=user.name,
-        email=user.email,
-        is_admin=bool(user.is_admin),
-        notifications_enabled=bool(user.notifications_enabled),
-        daily_energy_goal_kwh=user.daily_energy_goal_kwh,
-        weekly_energy_goal_kwh=user.weekly_energy_goal_kwh,
-        monthly_budget_gbp=user.monthly_budget_gbp,
-        created_at=user.created_at,
-    )
+    return await _user_response(db, user)
 
 
 @router.patch("/profile", response_model=UserResponse)
@@ -208,17 +208,7 @@ async def update_profile(body: ProfileUpdateRequest, request: Request, db: Async
     await db.commit()
     await db.refresh(user)
 
-    return UserResponse(
-        id=user.id,
-        name=user.name,
-        email=user.email,
-        is_admin=bool(user.is_admin),
-        notifications_enabled=bool(user.notifications_enabled),
-        daily_energy_goal_kwh=user.daily_energy_goal_kwh,
-        weekly_energy_goal_kwh=user.weekly_energy_goal_kwh,
-        monthly_budget_gbp=user.monthly_budget_gbp,
-        created_at=user.created_at,
-    )
+    return await _user_response(db, user)
 
 
 @router.post("/push-token")
