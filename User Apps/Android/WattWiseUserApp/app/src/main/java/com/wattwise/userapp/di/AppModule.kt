@@ -2,6 +2,7 @@ package com.wattwise.userapp.di
 
 import com.wattwise.userapp.data.remote.WattWiseApiService
 import com.wattwise.userapp.data.remote.WattWiseAuthApi
+import com.wattwise.userapp.BuildConfig
 import com.wattwise.userapp.util.Constants
 import dagger.Module
 import dagger.Provides
@@ -36,8 +37,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(serverConfig: ServerConfig): OkHttpClient {
+        // Never log the session token; no HTTP logging at all in release builds.
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.HEADERS
+            redactHeader("Authorization")
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
         }
 
         // Rewrites the host/scheme/port of every outgoing request to match

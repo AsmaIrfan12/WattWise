@@ -30,9 +30,8 @@ class WattWiseJsBridge(
      */
     @JavascriptInterface
     fun navigateTo(tab: String) {
-        val safeTabs = setOf("home", "energy", "devices", "notifications", "goals", "ranking", "settings")
-        val safeTab = tab.lowercase().trim()
-        if (safeTab in safeTabs) {
+        val safeTab = com.wattwise.userapp.util.DeepLinks.sanitizeTab(tab)
+        if (safeTab != null) {
             Timber.d("🔗 JS bridge navigateTo: $safeTab")
             onTabNavigation(safeTab)
         } else {

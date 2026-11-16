@@ -21,11 +21,17 @@ class DeepLinkBus @Inject constructor() {
     private val _pendingTab = MutableStateFlow<String?>(null)
     val pendingTab: StateFlow<String?> = _pendingTab.asStateFlow()
 
-    fun publish(tab: String) {
+    // The alert a notification tap should open (null for plain tab links).
+    private val _pendingNotificationId = MutableStateFlow<Long?>(null)
+    val pendingNotificationId: StateFlow<Long?> = _pendingNotificationId.asStateFlow()
+
+    fun publish(tab: String, notificationId: Long? = null) {
+        _pendingNotificationId.value = notificationId
         _pendingTab.value = tab
     }
 
     fun consume() {
         _pendingTab.value = null
+        _pendingNotificationId.value = null
     }
 }

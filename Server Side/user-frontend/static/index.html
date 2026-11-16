@@ -2105,6 +2105,15 @@ window.saveBudgetSetting = saveBudgetSetting;
 window.exportMyData = exportMyData;
 window.logout = logout;
 
+// Called by the Android app when the user taps an alert notification: open that alert.
+window.openAlertFromNative = function(id) {
+  const n = parseInt(id, 10);
+  if (!n) { goSection('notifications'); return; }
+  _pendingFocusId = n;
+  focusPendingAlert._switched = false;
+  if (_activeSection === 'notifications') loadNotifications(); else goSection('notifications');
+};
+
 // Called by Android WebView after JWT is injected into localStorage.
 // Re-authenticates the frontend without a page reload if the user was logged out.
 window.onNativeTokenInjected = async function(t) {

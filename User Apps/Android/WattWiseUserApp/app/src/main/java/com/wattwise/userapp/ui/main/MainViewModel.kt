@@ -85,6 +85,9 @@ class MainViewModel @Inject constructor(
     private val _pendingDeepLinkTab = MutableStateFlow<String?>(null)
     val pendingDeepLinkTab: StateFlow<String?> = _pendingDeepLinkTab.asStateFlow()
 
+    // The alert to open (from a notification tap); null for a plain tab link.
+    val pendingAlertId: StateFlow<Long?> = deepLinkBus.pendingNotificationId
+
     init {
         // MainActivity publishes notification-tap / URI deep links here. It
         // resolves a MainViewModel from a different ViewModelStore than the one

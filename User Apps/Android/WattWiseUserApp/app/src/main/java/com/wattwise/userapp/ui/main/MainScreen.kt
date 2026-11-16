@@ -2,6 +2,8 @@ package com.wattwise.userapp.ui.main
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.http.SslError
@@ -78,6 +80,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.wattwise.userapp.BuildConfig
+import com.wattwise.userapp.util.DeepLinks
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -102,6 +105,7 @@ fun MainScreen(
     val lastWebViewUrl by viewModel.lastWebViewUrl.collectAsState()
     val logoutEvent by viewModel.logoutEvent.collectAsState()
     val pendingDeepLinkTab by viewModel.pendingDeepLinkTab.collectAsState()
+    val pendingAlertId by viewModel.pendingAlertId.collectAsState()
 
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var progress by remember { mutableIntStateOf(0) }
@@ -157,11 +161,14 @@ fun MainScreen(
     // ── Deep-link → WebView JS navigation ────────────────────────────────
     // When a pending tab is queued (from a notification tap or Intent), evaluate
     // the JS function in the WebView and clear the pending state.
-    LaunchedEffect(pendingDeepLinkTab, isPageLoaded) {
+    LaunchedEffect(pendingDeepLinkTab, pendingAlertId, isPageLoaded) {
         val tab = pendingDeepLinkTab
         if (tab != null && isPageLoaded) {
-            webViewRef?.evaluateJavascript("window.goSection?.('$tab');", null)
-            Timber.d("🔗 Deep-link executed: goSection('$tab')")
+            // The script is built from a whitelisted tab and a numeric id only.
+            DeepLinks.navigationJs(tab, pendingAlertId)?.let { js ->
+                webViewRef?.evaluateJavascript(js, null)
+                Timber.d("🔗 Deep-link executed: tab=$tab alert=$pendingAlertId")
+            }
             viewModel.deepLinkConsumed()
         }
     }
@@ -258,8 +265,8 @@ fun MainScreen(
                                         onTabNavigation = { tab ->
                                             // JS called WattWiseApp.navigateTo("goals") — queue it
                                             viewModel.handleDeepLink(tab)
-                                            // Immediately evaluate since page is loaded
-                                            evaluateJavascript("window.goSection?.('$tab');", null)
+                                            // Immediately evaluate since page is loaded (tab is whitelisted by the bridge)
+                                            DeepLinks.navigationJs(tab, null)?.let { post { evaluateJavascript(it, null) } }
                                         },
                                         onLogoutRequest = {
                                             viewModel.logout()
@@ -275,6 +282,22 @@ fun MainScreen(
                                         url?.let { viewModel.onWebViewUrlChanged(it) }
                                     }
 
+                                    // The WebView is the dashboard, not a browser: anything that is not
+                                    // the configured WattWise server opens in the system browser instead,
+                                    // so a redirect can never take the session (and the JS bridge) elsewhere.
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                        val target = request?.url?.toString() ?: return true
+                                        if (DeepLinks.isServerUrl(target, viewModel.fullUrl.value)) return false
+                                        if (request.isForMainFrame && (target.startsWith("http://") || target.startsWith("https://"))) {
+                                            try {
+                                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                            } catch (e: Exception) {
+                                                Timber.w("No app to open external link")
+                                            }
+                                        }
+                                        return true
+                                    }
+
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         viewModel.onPageLoaded()
                                         isRefreshing = false
@@ -283,8 +306,9 @@ fun MainScreen(
                                         // ── Inject JWT into localStorage ──────────────
                                         // This ensures the web frontend always has the token
                                         // even after rotation (when the URL fragment is not resent).
+                                        // Only ever hand the session token to the WattWise server's own page.
                                         val token = viewModel.secureTokenStore.getTokenSync()
-                                        if (!token.isNullOrBlank()) {
+                                        if (!token.isNullOrBlank() && DeepLinks.isServerUrl(url, viewModel.fullUrl.value)) {
                                             // JSONObject.quote() safely escapes the token so any
                                             // special chars (e.g. from a crafted token) cannot break
                                             // out of the JS string literal.
@@ -345,7 +369,8 @@ fun MainScreen(
                                         origin: String?,
                                         callback: GeolocationPermissions.Callback?
                                     ) {
-                                        callback?.invoke(origin, true, false)
+                                        // Location is only shared with the WattWise server itself.
+                                        callback?.invoke(origin, DeepLinks.isServerUrl(origin, viewModel.fullUrl.value), false)
                                     }
                                 }
 

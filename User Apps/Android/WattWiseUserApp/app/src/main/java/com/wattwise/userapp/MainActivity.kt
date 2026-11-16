@@ -19,6 +19,7 @@ import com.wattwise.userapp.di.DeepLinkBus
 import com.wattwise.userapp.ui.navigation.WattWiseNavGraph
 import com.wattwise.userapp.ui.theme.WattWiseTheme
 import com.wattwise.userapp.util.Constants
+import com.wattwise.userapp.util.DeepLinks
 import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
 import javax.inject.Inject
@@ -90,7 +91,7 @@ class MainActivity : ComponentActivity() {
     private fun handleDeepLinkIntent(intent: Intent?) {
         if (intent == null) return
 
-        val tab: String? = when {
+        val rawTab: String? = when {
             // URI deep-link: wattwise://tab/notifications
             intent.data?.scheme == "wattwise" && intent.data?.host == "tab" -> {
                 intent.data?.lastPathSegment
@@ -98,15 +99,22 @@ class MainActivity : ComponentActivity() {
             // Notification extra: Bundle with key "tab"
             intent.hasExtra("tab") -> intent.getStringExtra("tab")
             // Notification extra: Bundle with key "screen"
-            intent.hasExtra("screen") -> intent.getStringExtra("screen")?.lowercase()
+            intent.hasExtra("screen") -> intent.getStringExtra("screen")
             else -> null
         }
+        // This Activity is exported and BROWSABLE: the tab can come from any app or web
+        // page, so only a known tab name is accepted (see DeepLinks).
+        val tab = DeepLinks.sanitizeTab(rawTab)
+        // A tapped alert notification also says WHICH alert, so the dashboard can open it.
+        val notificationId = DeepLinks.parseNotificationId(intent.getStringExtra("notification_id"))
 
-        if (!tab.isNullOrBlank()) {
-            Timber.d("🔗 MainActivity deep-link: tab=$tab")
+        if (tab != null || notificationId != null) {
+            Timber.d("🔗 MainActivity deep-link: tab=$tab notification=$notificationId")
             // Publish through the singleton bus — MainScreen's ViewModel lives
             // in a different ViewModelStore and may not exist yet on cold start.
-            deepLinkBus.publish(tab)
+            deepLinkBus.publish(tab ?: "notifications", notificationId)
+        } else if (rawTab != null) {
+            Timber.w("🔗 MainActivity: ignored unknown deep-link target")
         }
     }
 
