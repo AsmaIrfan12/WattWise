@@ -233,12 +233,63 @@ async def m003_core_loop(conn: AsyncConnection) -> None:
     await add_index(conn, "users", "idx_users_synthetic", "is_synthetic")
 
 
+# The one real home that existed before homes had an explicit broker identity.
+LEGACY_REAL_HOMES = {"IrfanA1@cardiff.ac.uk": "home_001"}
+
+
+async def m004_home_identity_and_liveness(conn: AsyncConnection) -> None:
+    """
+    A home's MQTT identity becomes data (homes.mqtt_username) so ingestion can bind
+    topic → home → device, and homes/devices remember when they were last heard from.
+    """
+    await add_column(conn, "homes", "mqtt_username", "VARCHAR(64) DEFAULT NULL")
+    await add_index(conn, "homes", "uq_homes_mqtt_username", "mqtt_username", unique=True)
+    await add_column(conn, "homes", "last_seen_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "homes", "publisher_status", "VARCHAR(16) DEFAULT NULL")
+    await add_column(conn, "homes", "publisher_seen_at", "DATETIME DEFAULT NULL")
+    await add_column(conn, "devices", "last_seen_at", "DATETIME DEFAULT NULL")
+
+    for email, mqtt_username in LEGACY_REAL_HOMES.items():
+        # First home of that user, only if nobody holds the username yet.
+        await conn.execute(text(
+            "UPDATE homes h JOIN users u ON u.id = h.user_id "
+            "SET h.mqtt_username = :m "
+            "WHERE u.email = :e AND h.mqtt_username IS NULL "
+            "  AND h.id = (SELECT id FROM (SELECT MIN(h2.id) AS id FROM homes h2 JOIN users u2 ON u2.id = h2.user_id "
+            "              WHERE u2.email = :e) t) "
+            "  AND NOT EXISTS (SELECT 1 FROM (SELECT id FROM homes WHERE mqtt_username = :m) x)"
+        ), {"e": email, "m": mqtt_username})
+
+    # (home, entity_id) identifies a device. Enforce it unless existing data violates it.
+    if not await index_exists(conn, "devices", "uq_device_home_entity"):
+        dupes = (await conn.execute(text(
+            "SELECT COUNT(*) FROM (SELECT home_id, entity_id FROM devices WHERE entity_id IS NOT NULL "
+            "GROUP BY home_id, entity_id HAVING COUNT(*) > 1) d"
+        ))).scalar()
+        if dupes:
+            logger.warning("devices has %s duplicate (home_id, entity_id) pairs — unique key not added", dupes)
+            await add_index(conn, "devices", "idx_device_home_entity", "home_id, entity_id")
+        else:
+            await conn.execute(text("ALTER TABLE devices ADD UNIQUE INDEX uq_device_home_entity (home_id, entity_id)"))
+
+    # Seed last_seen from existing readings (index lookup per device).
+    await conn.execute(text(
+        "UPDATE devices d SET d.last_seen_at = "
+        "(SELECT MAX(r.recorded_at) FROM energy_readings r WHERE r.device_id = d.id) WHERE d.last_seen_at IS NULL"
+    ))
+    await conn.execute(text(
+        "UPDATE homes h SET h.last_seen_at = "
+        "(SELECT MAX(d.last_seen_at) FROM devices d WHERE d.home_id = h.id) WHERE h.last_seen_at IS NULL"
+    ))
+
+
 Migration = tuple[int, str, Callable[[AsyncConnection], Awaitable[None]]]
 
 MIGRATIONS: list[Migration] = [
     (1, "keep_decisions_when_notifications_expire", m001_keep_decisions_when_notifications_expire),
     (2, "audit_action_types", m002_audit_action_types),
     (3, "core_loop", m003_core_loop),
+    (4, "home_identity_and_liveness", m004_home_identity_and_liveness),
 ]
 
 

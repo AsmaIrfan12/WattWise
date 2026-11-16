@@ -4,6 +4,9 @@ WattWise MQTT Client
 Subscribes to wattwise/homes/+/devices/+/data and persists
 energy readings to MySQL (energy_readings) and InfluxDB.
 
+A reading is stored only when the home named in its topic is registered
+(homes.mqtt_username) and the device belongs to that home — see _write_reading_to_db.
+
 Fixes applied:
 - InfluxDB client is now a module-level singleton (was recreated per message)
 - MQTT broker authentication enabled via settings
@@ -16,14 +19,15 @@ import json
 import logging
 import math
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta, timezone
 
 import paho.mqtt.client as mqtt
-from sqlalchemy import select
+from sqlalchemy import and_, select, update
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.models import Device, EnergyReading
+from app.models import Device, EnergyReading, Home
 
 logger = logging.getLogger("mqtt_client")
 
@@ -116,6 +120,83 @@ def _validate_payload(payload: dict) -> tuple[float, float | None, float | None,
 
 # ── MQTT Callbacks ────────────────────────────────────────────
 
+# ── Ingestion bookkeeping ─────────────────────────────────────
+# Why each message was accepted or dropped. Surfaced in the admin panel (per worker)
+# and logged — a dropped reading must never be silent again.
+_ingest_stats: dict[str, int] = {}
+_last_reject_logged: dict[str, float] = {}
+_home_cache: dict[str, tuple[int | None, float]] = {}
+_HOME_CACHE_TTL = 60.0
+_last_seen_written: dict[int, float] = {}
+
+
+def _count(outcome: str, detail: str = "") -> None:
+    _ingest_stats[outcome] = _ingest_stats.get(outcome, 0) + 1
+    if outcome in ("accepted", "duplicate"):
+        return
+    # At most one log line per distinct problem every 5 minutes.
+    key = f"{outcome}:{detail}"
+    now = time.monotonic()
+    if now - _last_reject_logged.get(key, -1e9) >= 300:
+        _last_reject_logged[key] = now
+        logger.warning("MQTT reading not stored (%s): %s", outcome, detail)
+        if len(_last_reject_logged) > 500:
+            _last_reject_logged.clear()
+
+
+def get_ingest_stats() -> dict:
+    return dict(_ingest_stats)
+
+
+def parse_topic(topic: str, prefix: str) -> tuple[str | None, str | None, str | None]:
+    """
+    Split an MQTT topic into (kind, home, device):
+
+        <prefix>/<home>/devices/<device>/data  → ("data", home, device)
+        <prefix>/<home>/status                 → ("status", home, None)
+
+    Anything else → (None, None, None).
+    """
+    parts = topic.split("/")
+    head = prefix.strip("/").split("/")
+    if parts[:len(head)] != head:
+        return None, None, None
+    rest = parts[len(head):]
+    if len(rest) == 4 and rest[1] == "devices" and rest[3] == "data" and rest[0] and rest[2]:
+        return "data", rest[0], rest[2]
+    if len(rest) == 2 and rest[1] == "status" and rest[0]:
+        return "status", rest[0], None
+    return None, None, None
+
+
+MAX_FUTURE_SKEW = timedelta(minutes=5)
+MAX_READING_AGE = timedelta(days=30)
+
+
+def parse_reading_time(raw, now: datetime) -> datetime | None:
+    """
+    The reading's own time as naive UTC.
+
+    • Missing or unparseable → `now`.
+    • An offset is converted to UTC (it used to be dropped, shifting e.g. +01:00 readings by an hour).
+    • More than 5 minutes in the future (a wrong RPi clock) → `now`.
+    • Older than 30 days → None (rejected: it would silently rewrite old summaries).
+    """
+    if not raw:
+        return now
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return now
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    if parsed > now + MAX_FUTURE_SKEW:
+        return now
+    if parsed < now - MAX_READING_AGE:
+        return None
+    return parsed
+
+
 # All backend workers join this group; the broker delivers each reading once per group.
 _SHARED_GROUP = "wattwise-ingest"
 
@@ -132,6 +213,10 @@ def on_connect(client, userdata, flags, rc):
         topic = f"$share/{_SHARED_GROUP}/{settings.MQTT_TOPIC_PREFIX}/+/devices/+/data"
         client.subscribe(topic, qos=1)
         logger.info("Subscribed to: %s", topic)
+        # Publisher heartbeats and last-wills (one member of the group handles each).
+        status_topic = f"$share/{_SHARED_GROUP}/{settings.MQTT_TOPIC_PREFIX}/+/status"
+        client.subscribe(status_topic, qos=0)
+        logger.info("Subscribed to: %s", status_topic)
 
         # Subscribe to broker telemetry so we can surface live stats in the admin panel.
         # Mosquitto needs sys_interval > 0 (default 10s) for these to publish.
@@ -161,63 +246,81 @@ def on_message(client, userdata, msg):
         return
 
     """Process incoming energy telemetry from smart plugs."""
+    kind, home_key, topic_device = parse_topic(msg.topic, settings.MQTT_TOPIC_PREFIX)
+    if kind == "status":
+        _handle_status(home_key, msg.payload)
+        return
+    if kind != "data":
+        return
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
         logger.debug("MQTT message on %s", msg.topic)
 
-        # Parse topic: wattwise/homes/<home_id>/devices/<device_entity>/data
-        parts = msg.topic.split("/")
-        topic_device_entity = parts[4] if len(parts) >= 5 else None
-
-        entity_id = _sanitize_entity_id(payload.get("entity_id") or topic_device_entity)
+        entity_id = _sanitize_entity_id(payload.get("entity_id") or topic_device)
         if not entity_id:
-            logger.warning("MQTT message has no entity_id on topic %s", msg.topic)
+            _count("invalid", f"no entity_id on {msg.topic}")
             return
 
-        # Parse timestamp
-        recorded_at_raw = payload.get("timestamp")
-        try:
-            recorded_at = (
-                datetime.fromisoformat(recorded_at_raw.replace("Z", "+00:00")).replace(tzinfo=None)
-                if recorded_at_raw
-                else datetime.utcnow()
-            )
-        except (ValueError, AttributeError):
-            recorded_at = datetime.utcnow()
+        recorded_at = parse_reading_time(payload.get("timestamp"), datetime.utcnow())
+        if recorded_at is None:
+            _count("bad_timestamp", f"{home_key}/{entity_id}: {payload.get('timestamp')!r}")
+            return
 
-        # Validate fields — skip malformed readings silently
+        # Validate fields — skip malformed readings
         try:
             power_watts, current_amps, voltage_volts, energy_kwh = _validate_payload(payload)
         except ValueError as ve:
-            logger.warning("Rejected invalid MQTT payload for %s: %s", entity_id, ve)
+            _count("invalid", f"{home_key}/{entity_id}: {ve}")
             return
 
         switch_state = payload.get("switch_state", "unknown")
         if switch_state not in ("on", "off", "unknown"):
             switch_state = "unknown"
 
-        # Write to InfluxDB for time-series storage
-        _write_to_influx(entity_id, power_watts, current_amps, voltage_volts, energy_kwh, recorded_at)
-
-        # Hand the MySQL write back to the app's event loop. on_message runs on
-        # paho's network thread, so this must be threadsafe — ensure_future here
-        # would silently drop the write (wrong thread / no running loop).
+        # Hand the write to the app's event loop. on_message runs on paho's network
+        # thread, so this must be threadsafe. The device is matched there, and only a
+        # matched reading reaches MySQL or InfluxDB.
         if _loop is not None and not _loop.is_closed():
             asyncio.run_coroutine_threadsafe(
                 _write_reading_to_db(
-                    entity_id, power_watts, current_amps,
+                    home_key, entity_id, power_watts, current_amps,
                     voltage_volts, energy_kwh, switch_state, recorded_at
                 ),
                 _loop,
             )
         else:
-            logger.error(
-                "Event loop unavailable — dropping MySQL write for %s "
-                "(InfluxDB write still attempted above)", entity_id
-            )
+            _count("db_error", "event loop unavailable")
 
     except Exception as e:
-        logger.error("Error processing MQTT message: %s", e, exc_info=True)
+        _count("invalid", f"unparseable message on {msg.topic}: {e}")
+
+
+def _handle_status(home_key: str, raw: bytes):
+    """Publisher heartbeat / last-will on wattwise/homes/<home>/status."""
+    try:
+        text_payload = raw.decode("utf-8", errors="ignore").strip()
+        try:
+            status = str(json.loads(text_payload).get("status", "")).lower()
+        except (ValueError, AttributeError):
+            status = text_payload.lower()
+        if status not in ("online", "offline", "stale"):
+            return
+        if _loop is not None and not _loop.is_closed():
+            asyncio.run_coroutine_threadsafe(_save_publisher_status(home_key, status), _loop)
+    except Exception as e:
+        logger.debug("Bad status message for %s: %s", home_key, e)
+
+
+async def _save_publisher_status(home_key: str, status: str):
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(Home).where(Home.mqtt_username == home_key)
+                .values(publisher_status=status, publisher_seen_at=datetime.utcnow())
+            )
+            await session.commit()
+    except Exception as e:
+        logger.warning("Could not save publisher status for %s: %s", home_key, e)
 
 
 def _write_to_influx(
@@ -226,6 +329,7 @@ def _write_to_influx(
     current_amps, voltage_volts,
     energy_kwh,
     recorded_at: datetime,
+    home_id: int | None = None,
 ):
     """Write energy reading to InfluxDB using the shared client."""
     influx = _get_influx_client()
@@ -240,9 +344,13 @@ def _write_to_influx(
         if energy_kwh is not None:
             fields["energy_kwh"] = energy_kwh
 
+        tags = {"entity_id": entity_id}
+        if home_id is not None:
+            # Lets series be told apart per home even if two homes share an entity_id.
+            tags["home_id"] = str(home_id)
         influx.write_points([{
             "measurement": "W",
-            "tags": {"entity_id": entity_id},
+            "tags": tags,
             "fields": fields,
             "time": recorded_at.isoformat() + "Z",
         }])
@@ -253,7 +361,21 @@ def _write_to_influx(
         _influx_client = None
 
 
+async def _resolve_home_id(session, home_key: str) -> int | None:
+    """Home id for an MQTT username, cached briefly (homes are provisioned rarely)."""
+    now = time.monotonic()
+    cached = _home_cache.get(home_key)
+    if cached and now - cached[1] < _HOME_CACHE_TTL:
+        return cached[0]
+    home_id = (await session.execute(
+        select(Home.id).where(Home.mqtt_username == home_key, Home.is_active)
+    )).scalar_one_or_none()
+    _home_cache[home_key] = (home_id, now)
+    return home_id
+
+
 async def _write_reading_to_db(
+    home_key: str,
     entity_id: str,
     power_watts: float,
     current_amps, voltage_volts,
@@ -261,21 +383,33 @@ async def _write_reading_to_db(
     switch_state: str,
     recorded_at: datetime,
 ):
-    """Persist energy reading to MySQL. Skips duplicate readings (same device + timestamp)."""
+    """
+    Persist one reading. The device is found inside the home named by the topic — the
+    broker's ACL guarantees a publisher can only use its own home's topic, so a home
+    can never write into another home's devices, and two homes may reuse an entity_id.
+    """
     try:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Device).where(Device.entity_id == entity_id, Device.is_active == True)
-            )
-            device = result.scalar_one_or_none()
+            home_id = await _resolve_home_id(session, home_key)
+            if home_id is not None:
+                device = (await session.execute(
+                    select(Device).where(
+                        Device.home_id == home_id, Device.entity_id == entity_id, Device.is_active
+                    ).order_by(Device.id).limit(1)
+                )).scalar_one_or_none()
+            elif settings.MQTT_STRICT_HOME_BINDING:
+                _count("unknown_home", f"no registered home publishes as '{home_key}'")
+                return
+            else:
+                device = (await session.execute(
+                    select(Device).where(Device.entity_id == entity_id, Device.is_active).order_by(Device.id).limit(1)
+                )).scalar_one_or_none()
 
             if not device:
-                logger.debug("Device not found for entity_id: %s — skipping MySQL write", entity_id)
+                _count("unknown_device", f"{home_key}: no active device with entity_id '{entity_id}'")
                 return
 
             # Duplicate guard: skip if reading already exists for this device+timestamp (within 5s)
-            from datetime import timedelta
-            from sqlalchemy import and_
             dup_result = await session.execute(
                 select(EnergyReading.id).where(
                     and_(
@@ -286,10 +420,10 @@ async def _write_reading_to_db(
                 ).limit(1)
             )
             if dup_result.scalar_one_or_none():
-                logger.debug("Duplicate reading skipped for device %s at %s", device.id, recorded_at)
+                _count("duplicate")
                 return
 
-            reading = EnergyReading(
+            session.add(EnergyReading(
                 device_id=device.id,
                 recorded_at=recorded_at,
                 power_watts=power_watts,
@@ -297,12 +431,24 @@ async def _write_reading_to_db(
                 voltage_volts=voltage_volts,
                 energy_kwh=energy_kwh,
                 switch_state=switch_state,
-            )
-            session.add(reading)
+            ))
+            # Liveness, at most once a minute per device.
+            mono = time.monotonic()
+            if mono - _last_seen_written.get(device.id, 0.0) >= 60:
+                _last_seen_written[device.id] = mono
+                seen = datetime.utcnow()
+                await session.execute(update(Device).where(Device.id == device.id).values(last_seen_at=seen))
+                await session.execute(update(Home).where(Home.id == device.home_id).values(last_seen_at=seen))
             await session.commit()
-            logger.debug("Saved reading for device %s: %.1fW", device.name, power_watts)
+            _count("accepted")
+            device_home_id = device.home_id
+
+        # Time-series copy, off the event loop (the client is synchronous).
+        await asyncio.to_thread(
+            _write_to_influx, entity_id, power_watts, current_amps, voltage_volts, energy_kwh, recorded_at, device_home_id
+        )
     except Exception as e:
-        logger.error("MySQL write error for %s: %s", entity_id, e, exc_info=True)
+        _count("db_error", f"{home_key}/{entity_id}: {e}")
 
 
 # ── Lifecycle ─────────────────────────────────────────────────
@@ -396,6 +542,8 @@ def get_broker_stats_snapshot() -> dict:
 
     return {
         "broker_connected": _mqtt_connected,
+        # Counts since this worker started (each of the API workers keeps its own).
+        "ingest": get_ingest_stats(),
         "topics_cached": len(_broker_stats),
         "last_update": last_update,
         "metrics": metrics,

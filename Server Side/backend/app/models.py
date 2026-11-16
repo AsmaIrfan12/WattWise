@@ -72,6 +72,12 @@ class Home(Base):
     )
     registered_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    # The broker account this home's RPi publishes as (topic wattwise/homes/<mqtt_username>/…).
+    # NULL for homes with no RPi (synthetic homes are fed over HTTP).
+    mqtt_username = Column(String(64), nullable=True, unique=True)
+    last_seen_at = Column(DateTime, nullable=True)        # last reading from any device
+    publisher_status = Column(String(16), nullable=True)   # online / offline / stale, from the status topic
+    publisher_seen_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="homes")
     devices = relationship("Device", back_populates="home", cascade="all, delete-orphan")
@@ -96,6 +102,7 @@ class Device(Base):
     rated_wattage = Column(Float, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, nullable=True)
 
     home = relationship("Home", back_populates="devices")
     readings = relationship("EnergyReading", back_populates="device", cascade="all, delete-orphan")

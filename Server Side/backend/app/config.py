@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     ANOMALY_MIN_BASELINE_KWH: float = 0.02
     ANOMALY_MIN_BASELINE_SAMPLES: int = 7
 
+    # MQTT ingestion: a reading is accepted only when its topic's home
+    # (wattwise/homes/<mqtt_username>/…) is a registered home AND the device belongs
+    # to that home. Set false only to fall back to the old global entity_id match.
+    MQTT_STRICT_HOME_BINDING: bool = True
+    # A real home with no reading for this long is reported offline.
+    HOME_OFFLINE_AFTER_MINUTES: int = 15
+
     # Goal alerts: warn when a goal period reaches this % of its target
     GOAL_WARNING_PERCENT: float = 80.0
 

@@ -30,7 +30,7 @@ from app.persona_classifier import classify_all_users, seed_default_personas
 from app.routers import auth, devices, readings, goals, decisions, notifications, analysis, admin, export, backup
 from app.routers import advanced
 from app.routers import influx, environment, smart_notifications
-from app.routers import interactions, admin_decisions
+from app.routers import interactions, admin_decisions, admin_homes
 
 
 def _configure_logging():
@@ -427,6 +427,7 @@ app.include_router(environment.router)
 app.include_router(smart_notifications.router)
 app.include_router(interactions.router)
 app.include_router(admin_decisions.router)
+app.include_router(admin_homes.router)
 
 
 # ── Health ────────────────────────────────────────────────────

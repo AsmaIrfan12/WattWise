@@ -19,3 +19,13 @@ devices per RPi sending data to this server → automated alerts (and manual adm
 alerts) go to user accounts → the user opens the alert, takes an action and reports
 it → the decision is recorded and visible in the admin portal → the system analyses
 usage based on those interactions.
+
+## 2026-11-16 — Verify through the PUBLIC entry point after every deploy
+- **What happened:** I redeployed single services (`docker compose up -d --build user-dashboard`)
+  and checked them on their own ports. The public proxy on port 80 still held the old
+  container address and served 502 for the dashboard for about 20 minutes before I noticed.
+- **Rule:** after any deploy, check the routes users actually hit — `http://<server>/`,
+  `/health`, `/admin/`, and `:3000/api/...` — not just the container's own port or
+  `docker compose ps`. (The nginx configs now re-resolve upstreams, but the check stays.)
+- **Rule:** files copied into a container with `docker cp` vanish when it is recreated;
+  re-copy before re-running a check, and never read "no output" as "passed".
