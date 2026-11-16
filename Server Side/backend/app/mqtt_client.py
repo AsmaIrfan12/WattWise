@@ -128,6 +128,7 @@ _last_reject_logged: dict[str, float] = {}
 _home_cache: dict[str, tuple[int | None, float]] = {}
 _HOME_CACHE_TTL = 60.0
 _last_seen_written: dict[int, float] = {}
+_home_seen_written: dict[int, float] = {}
 
 
 def _count(outcome: str, detail: str = "") -> None:
@@ -391,6 +392,38 @@ def _write_to_influx(
         _influx_client = None
 
 
+async def _touch_liveness(device_id: int, home_id: int) -> None:
+    """
+    Record "last heard from", at most once a minute per device and per home.
+
+    Deliberately NOT part of the reading's transaction: a home's devices report in the
+    same instant, and six concurrent transactions each updating the one `homes` row
+    deadlocked and cost readings. Here each row is claimed (check-and-set with no
+    await in between, so only one coroutine wins) and updated in its own tiny
+    transaction; a failure only delays the liveness display.
+    """
+    mono = time.monotonic()
+    touch_device = mono - _last_seen_written.get(device_id, 0.0) >= 60
+    touch_home = mono - _home_seen_written.get(home_id, 0.0) >= 60
+    if touch_device:
+        _last_seen_written[device_id] = mono
+    if touch_home:
+        _home_seen_written[home_id] = mono
+    if not (touch_device or touch_home):
+        return
+    seen = datetime.utcnow()
+    try:
+        async with AsyncSessionLocal() as session:
+            if touch_device:
+                await session.execute(update(Device).where(Device.id == device_id).values(last_seen_at=seen))
+                await session.commit()
+            if touch_home:
+                await session.execute(update(Home).where(Home.id == home_id).values(last_seen_at=seen))
+                await session.commit()
+    except Exception as e:
+        logger.debug("liveness update skipped: %s", e)
+
+
 async def _resolve_home_id(session, home_key: str) -> int | None:
     """Home id for an MQTT username, cached briefly (homes are provisioned rarely)."""
     now = time.monotonic()
@@ -462,16 +495,11 @@ async def _write_reading_to_db(
                 energy_kwh=energy_kwh,
                 switch_state=switch_state,
             ))
-            # Liveness, at most once a minute per device.
-            mono = time.monotonic()
-            if mono - _last_seen_written.get(device.id, 0.0) >= 60:
-                _last_seen_written[device.id] = mono
-                seen = datetime.utcnow()
-                await session.execute(update(Device).where(Device.id == device.id).values(last_seen_at=seen))
-                await session.execute(update(Home).where(Home.id == device.home_id).values(last_seen_at=seen))
             await session.commit()
             _count("accepted")
-            device_home_id = device.home_id
+            device_id, device_home_id = device.id, device.home_id
+
+        await _touch_liveness(device_id, device_home_id)
 
         # Time-series copy, off the event loop (the client is synchronous).
         await asyncio.to_thread(
