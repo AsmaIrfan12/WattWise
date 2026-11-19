@@ -1,12 +1,13 @@
 package com.wattwise.userapp.data.repository
 
 import com.wattwise.userapp.data.local.ServerPreferencesDataStore
-import com.wattwise.userapp.data.remote.WattWiseApiService
 import com.wattwise.userapp.data.remote.NetworkConnectivityObserver
+import com.wattwise.userapp.data.remote.WattWiseApiService
 import com.wattwise.userapp.di.ServerConfig
 import com.wattwise.userapp.domain.model.ConnectivityStatus
 import com.wattwise.userapp.domain.model.Resource
 import com.wattwise.userapp.util.Constants
+import com.wattwise.userapp.util.ServerUrls
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -16,9 +17,8 @@ import javax.inject.Singleton
 
 /**
  * Single source of truth for server configuration and connectivity.
- * Combines DataStore preferences with Retrofit connection testing.
- * Updates [ServerConfig.baseUrl] whenever the user saves a new address
- * so the OkHttp interceptor picks it up on the next request.
+ * Keeps [ServerConfig.baseUrl] (used by every API request) equal to the address the
+ * dashboard is loaded from, including the port.
  */
 @Singleton
 class ServerRepository @Inject constructor(
@@ -32,34 +32,36 @@ class ServerRepository @Inject constructor(
     val timeout: Flow<Int> = dataStore.timeout
 
     val fullUrl: Flow<String> = combine(dataStore.serverUrl, dataStore.port) { url, port ->
-        buildFullUrl(url, port)
+        ServerUrls.build(url, port)
     }
 
     val connectivity: Flow<ConnectivityStatus> = connectivityObserver.observe
 
     val isConnected: Flow<Boolean> = connectivity.map { it is ConnectivityStatus.Available }
 
-    suspend fun updateServerUrl(url: String) {
-        dataStore.setServerUrl(url)
-        serverConfig.baseUrl = url
+    suspend fun saveServer(url: String, port: Int, timeoutSeconds: Int) {
+        val cleanUrl = url.trim().trimEnd('/')
+        dataStore.setServerUrl(cleanUrl)
+        dataStore.setPort(port)
+        dataStore.setTimeout(timeoutSeconds)
+        serverConfig.baseUrl = ServerUrls.build(cleanUrl, port)
     }
-
-    suspend fun updatePort(port: Int) = dataStore.setPort(port)
-    suspend fun updateTimeout(seconds: Int) = dataStore.setTimeout(seconds)
 
     suspend fun resetToDefaults() {
         dataStore.resetToDefaults()
-        serverConfig.baseUrl = Constants.DEFAULT_SERVER_URL
+        serverConfig.baseUrl = ServerUrls.build(Constants.DEFAULT_SERVER_URL, Constants.DEFAULT_PORT)
     }
 
+    /** Tests the address typed in Settings (not the saved one). */
     suspend fun testConnection(url: String, port: Int): Resource<Int> {
+        if (!ServerUrls.isValid(url)) {
+            return Resource.Error("Enter an address starting with http:// or https://")
+        }
         return try {
-            val fullUrl = buildFullUrl(url, port)
-            Timber.d("Testing connection to: $fullUrl")
-            val response = apiService.testConnection(fullUrl)
-            val code = response.code()
-            Timber.d("Connection test result: HTTP $code")
-            Resource.Success(code)
+            val target = ServerUrls.build(url, port)
+            val response = apiService.testConnection(target)
+            Timber.d("Connection test: HTTP ${response.code()}")
+            Resource.Success(response.code())
         } catch (e: Exception) {
             Timber.e(e, "Connection test failed")
             Resource.Error(e.message ?: "Connection failed", e)
@@ -68,9 +70,4 @@ class ServerRepository @Inject constructor(
 
     fun isCurrentlyConnected(): Boolean = connectivityObserver.isCurrentlyConnected()
     fun getNetworkType(): String = connectivityObserver.getNetworkType()
-
-    private fun buildFullUrl(url: String, port: Int): String {
-        val base = url.trimEnd('/')
-        return if (port == 443 || port == 80) base else "$base:$port"
-    }
 }

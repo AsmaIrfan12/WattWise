@@ -54,7 +54,8 @@ fun LoginScreen(
     viewModel: AuthViewModel = hiltViewModel(),
     onLoginSuccess: () -> Unit,
     onNavigateToSignup: () -> Unit,
-    onNavigateToForgotPassword: () -> Unit = {}
+    onNavigateToForgotPassword: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.loginState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -296,7 +297,16 @@ fun LoginScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(32.dp))
+                // ── Server address (needed when sign-in cannot reach the server) ──
+                TextButton(onClick = onNavigateToSettings) {
+                    Text(
+                        text = "Server settings",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 13.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
 
                 // ── Research credit ──
                 Text(

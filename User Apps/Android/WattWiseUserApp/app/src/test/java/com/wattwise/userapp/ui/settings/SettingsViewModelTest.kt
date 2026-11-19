@@ -1,10 +1,10 @@
 package com.wattwise.userapp.ui.settings
 
-import com.wattwise.userapp.data.local.NotificationPrefsStore
-import com.wattwise.userapp.data.local.TokenDataStore
+import com.wattwise.userapp.data.repository.AuthRepository
 import com.wattwise.userapp.data.repository.ServerRepository
 import com.wattwise.userapp.domain.model.Resource
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,16 +29,14 @@ class SettingsViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
     private lateinit var repository: ServerRepository
-    private lateinit var tokenDataStore: TokenDataStore
-    private lateinit var notifPrefs: NotificationPrefsStore
+    private lateinit var authRepository: AuthRepository
     private lateinit var viewModel: SettingsViewModel
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk(relaxed = true)
-        tokenDataStore = mockk(relaxed = true)
-        notifPrefs = mockk(relaxed = true)
+        authRepository = mockk(relaxed = true)
 
         // Stub reactive flows
         coEvery { repository.serverUrl } returns flowOf("https://www.talk2futurebuildings.systems")
@@ -57,7 +55,7 @@ class SettingsViewModelTest {
             repository.testConnection(any(), any())
         } returns Resource.Success(200)
 
-        viewModel = SettingsViewModel(repository, tokenDataStore, notifPrefs)
+        viewModel = SettingsViewModel(repository, authRepository)
         viewModel.testConnection("https://www.talk2futurebuildings.systems", 443)
 
         advanceUntilIdle()
@@ -68,12 +66,36 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `sign out clears the real session, then reports completion`() = runTest(testDispatcher) {
+        viewModel = SettingsViewModel(repository, authRepository)
+        var completed = false
+
+        viewModel.logout { completed = true }
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { authRepository.logout() }
+        assertTrue(completed)
+    }
+
+    @Test
+    fun `saving stores address and port together`() = runTest(testDispatcher) {
+        viewModel = SettingsViewModel(repository, authRepository)
+        var saved = false
+
+        viewModel.saveSettings("http://192.168.1.5", 3001, 20) { saved = true }
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.saveServer("http://192.168.1.5", 3001, 20) }
+        assertTrue(saved)
+    }
+
+    @Test
     fun `testConnection returns error on unreachable server`() = runTest(testDispatcher) {
         coEvery {
             repository.testConnection(any(), any())
         } returns Resource.Error("Connection refused")
 
-        viewModel = SettingsViewModel(repository, tokenDataStore, notifPrefs)
+        viewModel = SettingsViewModel(repository, authRepository)
         viewModel.testConnection("http://invalid-server", 3001)
 
         advanceUntilIdle()

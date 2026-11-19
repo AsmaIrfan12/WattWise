@@ -1,8 +1,10 @@
 package com.wattwise.userapp.data.repository
 
 import android.util.Patterns
+import com.wattwise.userapp.data.local.NotificationPrefsStore
 import com.wattwise.userapp.data.local.SecureTokenStore
 import com.wattwise.userapp.data.remote.WattWiseAuthApi
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -18,12 +20,54 @@ import javax.inject.Singleton
 @Singleton
 class AuthRepository @Inject constructor(
     private val authApi: WattWiseAuthApi,
-    private val secureTokenStore: SecureTokenStore
+    private val secureTokenStore: SecureTokenStore,
+    private val notifPrefs: NotificationPrefsStore
 ) {
 
     /** Reactive token flow — UI observes this to detect login/logout state. */
     val tokenFlow = secureTokenStore.token
     val isAuthenticated = secureTokenStore.isAuthenticated
+
+    // ── Session ────────────────────────────────────────────────────────────
+
+    /**
+     * True when the app should open on the dashboard.
+     *
+     * A stored token the server rejects (it expires after 7 days) is removed, so the
+     * user gets the sign-in screen instead of a dashboard that fails on every request.
+     * When the server cannot be reached the stored session is kept: being offline must
+     * not sign anyone out.
+     */
+    suspend fun hasUsableSession(): Boolean {
+        secureTokenStore.init()
+        val bearer = secureTokenStore.getBearerHeader() ?: return false
+        val status = withTimeoutOrNull(SESSION_CHECK_TIMEOUT_MS) {
+            try {
+                authApi.me(bearer).code()
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (status == 401) {
+            Timber.i("Stored session rejected by the server: signing out locally")
+            clearLocalSession()
+            return false
+        }
+        return true
+    }
+
+    /** The dashboard signed in by itself: use its token from now on. */
+    suspend fun adoptToken(token: String) {
+        if (token.isBlank() || token == secureTokenStore.getTokenSync()) return
+        secureTokenStore.saveToken(token)
+        notifPrefs.clearLastSeenNotificationId()
+        Timber.i("Session token updated from the dashboard")
+    }
+
+    private suspend fun clearLocalSession() {
+        secureTokenStore.clearAll()
+        notifPrefs.clearLastSeenNotificationId()
+    }
 
     // ── Login ──────────────────────────────────────────────────────────────
 
@@ -46,6 +90,7 @@ class AuthRepository @Inject constructor(
 
                 secureTokenStore.saveToken(token)
                 secureTokenStore.saveUserInfo(mail, name)
+                notifPrefs.clearLastSeenNotificationId()
                 Timber.i("✅ Login successful for $email")
                 Result.success(token)
             } else {
@@ -85,6 +130,7 @@ class AuthRepository @Inject constructor(
                 if (token != null) {
                     secureTokenStore.saveToken(token)
                     secureTokenStore.saveUserInfo(email, name)
+                    notifPrefs.clearLastSeenNotificationId()
                     Timber.i("✅ Signup successful for $email")
                     Result.success(token)
                 } else {
@@ -115,15 +161,16 @@ class AuthRepository @Inject constructor(
     suspend fun logout() {
         val bearer = secureTokenStore.getBearerHeader()
         if (bearer != null) {
-            try {
-                authApi.logout(bearer)
-                Timber.i("🔒 Server-side logout acknowledged")
-            } catch (e: Exception) {
-                // Non-fatal — local token is cleared regardless
-                Timber.w(e, "Server logout call failed (local logout still proceeding)")
+            // Best effort and bounded: signing out must not hang when offline.
+            withTimeoutOrNull(LOGOUT_CALL_TIMEOUT_MS) {
+                try {
+                    authApi.logout(bearer)
+                } catch (e: Exception) {
+                    Timber.w("Server sign-out call failed (signing out locally anyway)")
+                }
             }
         }
-        secureTokenStore.clearAll()
+        clearLocalSession()
         Timber.i("🔒 Local session cleared")
     }
 
@@ -155,6 +202,11 @@ class AuthRepository @Inject constructor(
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
+
+    private companion object {
+        const val SESSION_CHECK_TIMEOUT_MS = 4000L
+        const val LOGOUT_CALL_TIMEOUT_MS = 3000L
+    }
 
     private fun validateEmail(email: String): String? {
         if (email.isBlank()) return "Please enter your email address."

@@ -131,6 +131,11 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /** The dashboard signed in by itself (its own form): keep the app's session in step. */
+    fun onWebTokenChanged(token: String) {
+        viewModelScope.launch { authRepository.adoptToken(token) }
+    }
+
     fun logoutEventConsumed() {
         _logoutEvent.value = false
     }

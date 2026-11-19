@@ -40,6 +40,13 @@ object DeepLinks {
         return "window.goSection?.('$safeTab');"
     }
 
+    /** Three base64url segments: the shape of a session token, nothing else. */
+    fun looksLikeJwt(token: String?): Boolean {
+        if (token == null || token.length !in 20..4096) return false
+        val parts = token.split('.')
+        return parts.size == 3 && parts.all { p -> p.isNotEmpty() && p.all { it.isLetterOrDigit() || it == '-' || it == '_' } }
+    }
+
     /** True when [url] is served by the configured WattWise server (same scheme, host and port). */
     fun isServerUrl(url: String?, serverUrl: String?): Boolean {
         val a = origin(url) ?: return false

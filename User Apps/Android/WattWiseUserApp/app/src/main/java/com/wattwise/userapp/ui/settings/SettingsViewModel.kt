@@ -2,8 +2,7 @@ package com.wattwise.userapp.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.wattwise.userapp.data.local.NotificationPrefsStore
-import com.wattwise.userapp.data.local.TokenDataStore
+import com.wattwise.userapp.data.repository.AuthRepository
 import com.wattwise.userapp.data.repository.ServerRepository
 import com.wattwise.userapp.domain.model.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,51 +16,33 @@ import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * ViewModel for the Settings screen.
- * Manages server config CRUD, connection testing, biometric unlock preference.
+ * ViewModel for the Settings screen: server address, connection test, sign out.
  *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: ServerRepository,
-    private val tokenDataStore: TokenDataStore,
-    private val notifPrefs: NotificationPrefsStore
+    private val authRepository: AuthRepository
 ) : ViewModel() {
 
-    // ── Reactive preferences ──────────────────────────────────────────────
     val serverUrl: StateFlow<String> = repository.serverUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     val port: StateFlow<Int> = repository.port
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 443)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 80)
 
     val timeout: StateFlow<Int> = repository.timeout
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 20)
 
-    // ── Biometric unlock preference ───────────────────────────────────────
-    val biometricEnabled: StateFlow<Boolean> = notifPrefs.biometricEnabled
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
-
-    fun setBiometricEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            notifPrefs.setBiometricEnabled(enabled)
-            Timber.d("Biometric unlock: $enabled")
-        }
-    }
-
-    // ── Connection test state ─────────────────────────────────────────────
     private val _testResult = MutableStateFlow<Resource<Int>?>(null)
     val testResult: StateFlow<Resource<Int>?> = _testResult.asStateFlow()
 
-    // ── Actions ───────────────────────────────────────────────────────────
-
-    fun saveSettings(url: String, port: Int, timeout: Int) {
+    fun saveSettings(url: String, port: Int, timeout: Int, onSaved: () -> Unit = {}) {
         viewModelScope.launch {
-            repository.updateServerUrl(url)
-            repository.updatePort(port)
-            repository.updateTimeout(timeout)
-            Timber.d("Settings saved: $url:$port (timeout: ${timeout}s)")
+            repository.saveServer(url, port, timeout)
+            Timber.d("Server settings saved")
+            onSaved()
         }
     }
 
@@ -76,17 +57,24 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             repository.resetToDefaults()
             _testResult.value = null
-            Timber.d("Settings reset to defaults")
         }
     }
 
     fun getNetworkType(): String = repository.getNetworkType()
     fun isConnected(): Boolean = repository.isCurrentlyConnected()
 
+    /**
+     * Signs out for real: the session token the dashboard and the background alert
+     * check use is removed. (This used to clear a different, unused store, so the user
+     * was signed straight back in on the next launch.)
+     */
     fun logout(onComplete: () -> Unit) {
         viewModelScope.launch {
-            tokenDataStore.clearToken()
-            Timber.d("User logged out — token cleared")
+            try {
+                authRepository.logout()
+            } catch (e: Exception) {
+                Timber.e(e, "Sign-out error")
+            }
             onComplete()
         }
     }

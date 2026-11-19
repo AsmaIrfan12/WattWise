@@ -1,38 +1,26 @@
 package com.wattwise.userapp
 
-import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.RingtoneManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.navigation.compose.rememberNavController
 import com.wattwise.userapp.di.DeepLinkBus
 import com.wattwise.userapp.ui.navigation.WattWiseNavGraph
 import com.wattwise.userapp.ui.theme.WattWiseTheme
-import com.wattwise.userapp.util.Constants
 import com.wattwise.userapp.util.DeepLinks
 import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * Single Activity hosting the entire app via Jetpack Navigation for Compose.
- * All screens (Splash, Main/WebView, Settings, About) are composable destinations.
+ * Single Activity hosting the whole app via Jetpack Navigation for Compose.
  *
- * Handles:
- *  - Edge-to-edge display
- *  - Notification channel creation
- *  - Deep-link Intents (wattwise://tab/<tabname> → WebView tab navigation)
- *  - Notification tap Intents → routes to correct dashboard tab
+ * Handles deep links (wattwise://tab/<name>) and notification taps, which are passed to
+ * the dashboard through [DeepLinkBus]. Notification channels are created in
+ * [WattWiseApplication]; the notification permission is requested on the dashboard
+ * screen, after sign-in.
  *
  * Developer: Mr. Suhas Devmane, Cardiff University, UK
  */
@@ -41,19 +29,8 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var deepLinkBus: DeepLinkBus
 
-    private val requestNotificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            Timber.d("POST_NOTIFICATIONS permission granted=$granted")
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Notification channels are also created in WattWiseApplication,
-        // but we recreate here as a safety net for older OS upgrades.
-        createNotificationChannels()
-        maybeRequestNotificationPermission()
-
         enableEdgeToEdge()
 
         setContent {
@@ -63,42 +40,24 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Handle deep-link Intent if the Activity was launched (not resumed) via one
-        handleDeepLinkIntent(intent)
+        // Only a fresh launch carries a new link. When Android re-creates the Activity
+        // it hands back the same Intent, which would re-open an old alert.
+        if (savedInstanceState == null) handleDeepLinkIntent(intent)
     }
 
-    /**
-     * Called when the Activity is already running and a new Intent arrives
-     * (e.g. user taps a notification while app is in the foreground).
-     */
+    /** The app is already open (launchMode singleTop) and a notification or link is tapped. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleDeepLinkIntent(intent)
     }
 
-    // ── Deep-link handling ────────────────────────────────────────────────
-
-    /**
-     * Extracts the tab name from a wattwise://tab/<name> URI or from
-     * a notification Intent extra ("tab" key), then queues it in MainViewModel
-     * so the WebView navigates to the correct section.
-     *
-     * Examples:
-     *   wattwise://tab/notifications → goSection('notifications')
-     *   wattwise://tab/goals        → goSection('goals')
-     *   Intent extra "tab" = "devices" → goSection('devices')
-     */
     private fun handleDeepLinkIntent(intent: Intent?) {
         if (intent == null) return
 
         val rawTab: String? = when {
-            // URI deep-link: wattwise://tab/notifications
-            intent.data?.scheme == "wattwise" && intent.data?.host == "tab" -> {
-                intent.data?.lastPathSegment
-            }
-            // Notification extra: Bundle with key "tab"
+            intent.data?.scheme == "wattwise" && intent.data?.host == "tab" -> intent.data?.lastPathSegment
             intent.hasExtra("tab") -> intent.getStringExtra("tab")
-            // Notification extra: Bundle with key "screen"
             intent.hasExtra("screen") -> intent.getStringExtra("screen")
             else -> null
         }
@@ -109,59 +68,10 @@ class MainActivity : ComponentActivity() {
         val notificationId = DeepLinks.parseNotificationId(intent.getStringExtra("notification_id"))
 
         if (tab != null || notificationId != null) {
-            Timber.d("🔗 MainActivity deep-link: tab=$tab notification=$notificationId")
-            // Publish through the singleton bus — MainScreen's ViewModel lives
-            // in a different ViewModelStore and may not exist yet on cold start.
+            Timber.d("Deep link: tab=$tab notification=$notificationId")
             deepLinkBus.publish(tab ?: "notifications", notificationId)
         } else if (rawTab != null) {
-            Timber.w("🔗 MainActivity: ignored unknown deep-link target")
-        }
-    }
-
-    private fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
-
-    // ── Notification channels ─────────────────────────────────────────────
-    private fun createNotificationChannels() {
-        val manager = getSystemService(NotificationManager::class.java)
-
-        // Channel 1: Energy Alerts (high importance — peak tariff, critical usage)
-        NotificationChannel(
-            Constants.NOTIFICATION_CHANNEL_ID_ENERGY,
-            Constants.NOTIFICATION_CHANNEL_NAME_ENERGY,
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Critical energy alerts from WattWise smart plugs"
-            enableLights(true)
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0, 300, 200, 300)
-            setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            manager.createNotificationChannel(this)
-        }
-
-        // Channel 2: General Info (lower importance — weekly summaries, tips)
-        NotificationChannel(
-            Constants.NOTIFICATION_CHANNEL_ID_INFO,
-            Constants.NOTIFICATION_CHANNEL_NAME_INFO,
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = "Weekly reports and energy tips from WattWise"
-            enableVibration(false)
-            manager.createNotificationChannel(this)
+            Timber.w("Ignored unknown deep-link target")
         }
     }
 }

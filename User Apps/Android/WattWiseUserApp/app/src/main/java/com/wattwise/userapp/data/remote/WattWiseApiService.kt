@@ -19,12 +19,22 @@ import retrofit2.http.Url
  */
 interface WattWiseApiService {
 
+    companion object {
+        /** Requests carrying this header are not rewritten to the saved server address. */
+        const val DIRECT_HEADER = "X-WattWise-Direct"
+    }
+
     /**
      * Test whether the WattWise backend is reachable.
      * HEAD request for minimal bandwidth.
      */
     @HEAD
-    suspend fun testConnection(@Url url: String): Response<Void>
+    suspend fun testConnection(
+        @Url url: String,
+        // Sent to exactly this address: without the marker the request would be
+        // redirected to the SAVED server and the test would not test what was typed.
+        @Header(DIRECT_HEADER) direct: String = "1"
+    ): Response<Void>
 
     /**
      * Check backend health (FastAPI /health endpoint).

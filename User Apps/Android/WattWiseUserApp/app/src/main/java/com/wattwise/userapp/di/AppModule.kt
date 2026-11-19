@@ -8,11 +8,12 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import java.io.IOException
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
@@ -32,10 +33,6 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideServerConfig(): ServerConfig = ServerConfig()
-
-    @Provides
-    @Singleton
     fun provideOkHttpClient(serverConfig: ServerConfig): OkHttpClient {
         // Never log the session token; no HTTP logging at all in release builds.
         val logging = HttpLoggingInterceptor().apply {
@@ -47,13 +44,19 @@ object AppModule {
         // whatever the user has configured as the server URL in Settings.
         val dynamicUrlInterceptor = Interceptor { chain ->
             val original = chain.request()
-            val configuredBase = serverConfig.baseUrl.trimEnd('/').toHttpUrl()
-            val newUrl = original.url.newBuilder()
-                .scheme(configuredBase.scheme)
-                .host(configuredBase.host)
-                .port(configuredBase.port)
-                .build()
-            chain.proceed(original.newBuilder().url(newUrl).build())
+            if (original.header(WattWiseApiService.DIRECT_HEADER) != null) {
+                // Connection test: go to the address that was typed, as typed.
+                chain.proceed(original.newBuilder().removeHeader(WattWiseApiService.DIRECT_HEADER).build())
+            } else {
+                val configuredBase = serverConfig.baseUrl.trimEnd('/').toHttpUrlOrNull()
+                    ?: throw IOException("The server address in Settings is not valid.")
+                val newUrl = original.url.newBuilder()
+                    .scheme(configuredBase.scheme)
+                    .host(configuredBase.host)
+                    .port(configuredBase.port)
+                    .build()
+                chain.proceed(original.newBuilder().url(newUrl).build())
+            }
         }
 
         return OkHttpClient.Builder()

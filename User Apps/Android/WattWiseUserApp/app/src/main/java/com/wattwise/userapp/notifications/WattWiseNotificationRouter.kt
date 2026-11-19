@@ -104,7 +104,9 @@ object WattWiseNotificationRouter {
      */
     fun buildLaunchIntent(context: Context, data: Bundle?): Intent {
         val intent = Intent(context, Class.forName("com.wattwise.userapp.MainActivity"))
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        // SINGLE_TOP: if the app is already open, deliver the tap to it (onNewIntent)
+        // instead of restarting the Activity and reloading the dashboard.
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         // Carry the payload extras (tab / screen / notification_id) through so
         // MainActivity.handleDeepLinkIntent can route to the right WebView tab.
         // Without this, taps from the poll worker (which has no applianceKey,

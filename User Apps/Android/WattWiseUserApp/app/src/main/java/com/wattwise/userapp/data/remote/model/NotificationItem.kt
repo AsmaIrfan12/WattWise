@@ -21,12 +21,12 @@ import com.google.gson.annotations.SerializedName
  */
 data class NotificationItem(
     @SerializedName("id")                val id: Int,
-    @SerializedName("title")             val title: String,
-    @SerializedName("message")           val message: String,
-    @SerializedName("notification_type") val type: String = "INFO",
-    @SerializedName("severity")          val severity: String = "INFO",
+    @SerializedName("title")             val title: String? = null,
+    @SerializedName("message")           val message: String? = null,
+    @SerializedName("notification_type") val type: String? = null,
+    @SerializedName("severity")          val severity: String? = null,
     @SerializedName("is_read")           val isRead: Boolean = false,
-    @SerializedName("created_at")        val createdAt: String = "",
+    @SerializedName("created_at")        val createdAt: String? = null,
     @SerializedName("action_type")       val actionType: String? = null,
     @SerializedName("device_name")       val deviceName: String? = null
 )

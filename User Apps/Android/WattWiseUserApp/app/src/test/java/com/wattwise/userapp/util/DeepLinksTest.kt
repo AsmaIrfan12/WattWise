@@ -51,4 +51,14 @@ class DeepLinksTest {
         assertFalse(DeepLinks.isServerUrl("javascript:alert(1)", server))
         assertFalse(DeepLinks.isServerUrl(null, server))
     }
+
+    @Test
+    fun `only token-shaped text is accepted from the dashboard`() {
+        assertTrue(DeepLinks.looksLikeJwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI0MiJ9.abc_DEF-123"))
+        assertFalse(DeepLinks.looksLikeJwt(null))
+        assertFalse(DeepLinks.looksLikeJwt(""))
+        assertFalse(DeepLinks.looksLikeJwt("not-a-token"))
+        assertFalse(DeepLinks.looksLikeJwt("aaaaaaaaaa.bbbbbbbbbb"))
+        assertFalse(DeepLinks.looksLikeJwt("aaaaaaaaaa.bbbbbbbbbb.cc');alert(1)//"))
+    }
 }

@@ -884,6 +884,9 @@ async function login() {
     localStorage.setItem('ww_token', token);
     setAuthUi(true);
     await init();
+    // Inside the Android app: hand the new session to the app, which otherwise keeps
+    // (and re-injects) its old token and uses it for the background alert check.
+    try { window.WattWiseApp?.onTokenChanged?.(token); } catch (e) {}
   } catch (e) {
     err.textContent = e.message;
     err.style.display = 'block';
@@ -907,6 +910,9 @@ function logout() {
   setAuthUi(false);
   document.getElementById('av').textContent = '?';
   document.getElementById('persona-chip').style.display = 'none';
+  // Inside the Android app: sign the app out too (also on an expired session), so it
+  // shows its own sign-in screen instead of putting the old token back on reload.
+  try { window.WattWiseApp?.onLogout?.(); } catch (e) {}
 }
 
 // ── Init ──────────────────────────────────────────────────────

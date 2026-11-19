@@ -6,12 +6,15 @@ import android.app.NotificationManager
 import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.wattwise.userapp.data.local.ServerPreferencesDataStore
 import com.wattwise.userapp.di.ServerConfig
 import com.wattwise.userapp.util.Constants
+import com.wattwise.userapp.util.ServerUrls
 import com.wattwise.userapp.workers.NotificationPollWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -66,9 +69,7 @@ class WattWiseApplication : Application(), Configuration.Provider {
         // Load the user-saved server URL into ServerConfig so Retrofit uses it
         // from the very first request (login/signup) rather than the compile-time default.
         appScope.launch {
-            val savedUrl = serverPrefs.serverUrl.first()
-            serverConfig.baseUrl = savedUrl
-            Timber.d("Server URL loaded: $savedUrl")
+            serverConfig.baseUrl = ServerUrls.build(serverPrefs.serverUrl.first(), serverPrefs.port.first())
         }
 
         enqueueNotificationPolling()
@@ -81,11 +82,15 @@ class WattWiseApplication : Application(), Configuration.Provider {
         val request = PeriodicWorkRequestBuilder<NotificationPollWorker>(
             repeatInterval = 15,
             repeatIntervalTimeUnit = TimeUnit.MINUTES
-        ).build()
+        )
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
 
+        // UPDATE keeps the existing schedule but applies this version's settings
+        // (KEEP left installs upgraded from an older build on the old request forever).
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             NotificationPollWorker.WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,   // Don't restart if already scheduled
+            ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
         Timber.d("⏱ NotificationPollWorker enqueued (15-min interval)")
@@ -103,7 +108,9 @@ class WattWiseApplication : Application(), Configuration.Provider {
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     description = "Alerts about your energy usage, goals, and peak tariff periods"
+                    enableLights(true)
                     enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 300, 200, 300)
                 }
             )
 

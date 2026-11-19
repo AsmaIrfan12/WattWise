@@ -33,6 +33,12 @@ interface WattWiseAuthApi {
         @Body details: Map<String, String>
     ): Response<Map<String, Any>>
 
+    /** GET /api/auth/me — 200 while the session token is valid, 401 once it is not. */
+    @GET("/api/auth/me")
+    suspend fun me(
+        @Header("Authorization") bearerToken: String
+    ): Response<Void>
+
     /**
      * POST /api/auth/logout  (optional server-side invalidation)
      */

@@ -47,6 +47,11 @@ class NotificationPrefsStore @Inject constructor(
         context.notifDataStore.edit { it[Keys.LAST_NOTIF_ID] = id }
     }
 
+    /** Forget the marker (sign-in / sign-out): the next check starts fresh for that account. */
+    suspend fun clearLastSeenNotificationId() {
+        context.notifDataStore.edit { it.remove(Keys.LAST_NOTIF_ID) }
+    }
+
     // ── Biometric unlock ──────────────────────────────────────────────────
 
     /** Whether biometric re-authentication is enabled when the app resumes from background. */

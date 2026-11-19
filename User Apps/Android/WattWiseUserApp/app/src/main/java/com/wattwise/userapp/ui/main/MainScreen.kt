@@ -15,6 +15,7 @@ import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -58,7 +59,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -110,6 +110,15 @@ fun MainScreen(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var progress by remember { mutableIntStateOf(0) }
     var isRefreshing by remember { mutableStateOf(false) }
+    // True once THIS WebView has finished loading the dashboard. (The ViewModel flag
+    // outlives the WebView, so it cannot say whether the page can run a deep link yet.)
+    var pageReady by remember { mutableStateOf(false) }
+
+    // Coming back to this screen after a failed load (e.g. from Settings, with a
+    // corrected address) should try again, not show the old error.
+    LaunchedEffect(Unit) {
+        if (viewModel.isError.value) viewModel.onRetry()
+    }
     // Track previous connectivity to only show snackbar on change
     var wasConnected by remember { mutableStateOf(true) }
 
@@ -161,13 +170,14 @@ fun MainScreen(
     // ── Deep-link → WebView JS navigation ────────────────────────────────
     // When a pending tab is queued (from a notification tap or Intent), evaluate
     // the JS function in the WebView and clear the pending state.
-    LaunchedEffect(pendingDeepLinkTab, pendingAlertId, isPageLoaded) {
+    LaunchedEffect(pendingDeepLinkTab, pendingAlertId, pageReady) {
         val tab = pendingDeepLinkTab
-        if (tab != null && isPageLoaded) {
+        val wv = webViewRef
+        if (tab != null && pageReady && wv != null) {
             // The script is built from a whitelisted tab and a numeric id only.
             DeepLinks.navigationJs(tab, pendingAlertId)?.let { js ->
-                webViewRef?.evaluateJavascript(js, null)
-                Timber.d("🔗 Deep-link executed: tab=$tab alert=$pendingAlertId")
+                wv.evaluateJavascript(js, null)
+                Timber.d("Deep link executed: tab=$tab alert=$pendingAlertId")
             }
             viewModel.deepLinkConsumed()
         }
@@ -256,7 +266,7 @@ fun MainScreen(
                                     setGeolocationEnabled(true)
                                     cacheMode = WebSettings.LOAD_DEFAULT
                                     mediaPlaybackRequiresUserGesture = false
-                                    userAgentString = "$userAgentString WattWiseApp/4.0"
+                                    userAgentString = "$userAgentString WattWiseApp/${BuildConfig.VERSION_NAME}"
                                 }
 
                                 // ── JS Bridge: window.WattWiseApp ──────────────────
@@ -271,13 +281,23 @@ fun MainScreen(
                                         onLogoutRequest = {
                                             viewModel.logout()
                                         },
+                                        onTokenChange = { token ->
+                                            viewModel.onWebTokenChanged(token)
+                                        },
                                         appVersion = BuildConfig.VERSION_NAME
                                     ),
                                     "WattWiseApp"
                                 )
 
+                                // A failed main-frame load still ends with onPageFinished (for
+                                // the built-in error page). Without this flag that call marked
+                                // the page as loaded, which hid the error screen and reloaded the
+                                // dashboard in an endless loop while the server was unreachable.
+                                var mainFrameFailed = false
+
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                        mainFrameFailed = false
                                         progress = 0
                                         url?.let { viewModel.onWebViewUrlChanged(it) }
                                     }
@@ -299,9 +319,11 @@ fun MainScreen(
                                     }
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
-                                        viewModel.onPageLoaded()
                                         isRefreshing = false
                                         progress = 100
+                                        if (mainFrameFailed) return
+                                        viewModel.onPageLoaded()
+                                        pageReady = true
 
                                         // ── Inject JWT into localStorage ──────────────
                                         // This ensures the web frontend always has the token
@@ -338,9 +360,27 @@ fun MainScreen(
                                         error: WebResourceError?
                                     ) {
                                         if (request?.isForMainFrame == true) {
+                                            mainFrameFailed = true
                                             isRefreshing = false
                                             viewModel.onPageError(
                                                 "Could not connect to the WattWise server.\n\nPlease check your internet connection and server settings."
+                                            )
+                                        }
+                                    }
+
+                                    // The server answered, but with a failure page (e.g. 502 while
+                                    // it restarts): show the retry screen, not a bare error page.
+                                    override fun onReceivedHttpError(
+                                        view: WebView?,
+                                        request: WebResourceRequest?,
+                                        errorResponse: WebResourceResponse?
+                                    ) {
+                                        val status = errorResponse?.statusCode ?: return
+                                        if (request?.isForMainFrame == true && status >= 500) {
+                                            mainFrameFailed = true
+                                            isRefreshing = false
+                                            viewModel.onPageError(
+                                                "The WattWise server is temporarily unavailable (HTTP $status).\n\nPlease try again in a minute."
                                             )
                                         }
                                     }
@@ -375,12 +415,21 @@ fun MainScreen(
                                 }
 
                                 webViewRef = this
-                                // On rotation: restore last URL instead of re-sending token fragment
-                                val urlToLoad = lastWebViewUrl ?: webUrl
-                                loadUrl(urlToLoad)
+                                // Returning to this screen: go back to the page that was open,
+                                // but only if it belongs to the server that is configured NOW
+                                // (after a change in Settings the old address must not be reused).
+                                val previous = lastWebViewUrl?.takeIf { DeepLinks.isServerUrl(it, webUrl) }
+                                loadUrl(previous ?: webUrl)
                             }
                         },
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        onRelease = { released ->
+                            // Leaving the screen or switching to the error screen: free the
+                            // WebView so it cannot keep loading (and calling back) unseen.
+                            pageReady = false
+                            if (webViewRef === released) webViewRef = null
+                            released.destroy()
+                        }
                     )
                 }
 
@@ -504,8 +553,8 @@ fun MainScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                     Button(
                         onClick = {
+                            // Clearing the error brings back a fresh WebView, which loads the dashboard.
                             viewModel.onRetry()
-                            webViewRef?.loadUrl(webUrl)
                         },
                         modifier = Modifier.fillMaxWidth(0.6f)
                     ) {
@@ -523,11 +572,4 @@ fun MainScreen(
         }
     }
 
-    // Cleanup WebView on dispose
-    DisposableEffect(Unit) {
-        onDispose {
-            webViewRef?.destroy()
-            webViewRef = null
-        }
-    }
 }

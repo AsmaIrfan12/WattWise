@@ -51,6 +51,7 @@ import com.wattwise.userapp.domain.model.Resource
 import com.wattwise.userapp.ui.theme.WattDanger
 import com.wattwise.userapp.ui.theme.WattSuccess
 import com.wattwise.userapp.util.Constants
+import com.wattwise.userapp.util.ServerUrls
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,11 +65,11 @@ fun SettingsScreen(
     val currentPort by viewModel.port.collectAsState()
     val currentTimeout by viewModel.timeout.collectAsState()
     val testResult by viewModel.testResult.collectAsState()
-    val biometricEnabled by viewModel.biometricEnabled.collectAsState()
 
     var url by remember(currentUrl) { mutableStateOf(currentUrl) }
     var port by remember(currentPort) { mutableStateOf(currentPort.toString()) }
     var timeout by remember(currentTimeout) { mutableStateOf(currentTimeout.toString()) }
+    var urlError by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -111,9 +112,13 @@ fun SettingsScreen(
 
                     OutlinedTextField(
                         value = url,
-                        onValueChange = { url = it },
+                        onValueChange = { url = it; urlError = false },
                         label = { Text("Server URL") },
                         placeholder = { Text(Constants.DEFAULT_SERVER_URL) },
+                        isError = urlError,
+                        supportingText = if (urlError) {
+                            { Text("Enter an address starting with http:// or https://") }
+                        } else null,
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -144,7 +149,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Default: ${Constants.DEFAULT_SERVER_URL} (port ${Constants.DEFAULT_PORT})\nFor local dev: http://<server-ip>:3001",
+                        text = "Default: ${Constants.DEFAULT_SERVER_URL} (port ${Constants.DEFAULT_PORT})\nSign-in, the dashboard and alerts all use this address and port.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.outline,
                         lineHeight = 16.sp
@@ -229,36 +234,6 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // ── Biometric Unlock Toggle ──
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "🔒 Biometric Unlock",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = "Re-authenticate with fingerprint or face when resuming",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Switch(
-                            checked = biometricEnabled,
-                            onCheckedChange = { viewModel.setBiometricEnabled(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = WattSuccess
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     // ── Background Notifications Status ──
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -272,7 +247,7 @@ fun SettingsScreen(
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Polls server every 15 min for new alerts",
+                                text = "Checks for new alerts about every 15 minutes while signed in",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -303,9 +278,12 @@ fun SettingsScreen(
                         val validUrl = url.trim()
                         val validPort = port.toIntOrNull() ?: Constants.DEFAULT_PORT
                         val validTimeout = timeout.toIntOrNull() ?: Constants.DEFAULT_TIMEOUT
-                        if (validUrl.startsWith("http://") || validUrl.startsWith("https://")) {
-                            viewModel.saveSettings(validUrl, validPort, validTimeout)
-                            onNavigateBack()
+                        if (ServerUrls.isValid(validUrl)) {
+                            // Leave only after the address is stored, so the dashboard
+                            // reopens on the new server and not the previous one.
+                            viewModel.saveSettings(validUrl, validPort, validTimeout, onSaved = onNavigateBack)
+                        } else {
+                            urlError = true
                         }
                     },
                     modifier = Modifier.weight(1f)
