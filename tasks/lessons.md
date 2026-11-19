@@ -39,3 +39,21 @@ usage based on those interactions.
   a "last seen"), update it outside their transactions, throttled and claimed by one
   writer. And test ingestion changes with a realistic burst (all of a home's devices at
   once), not one message.
+
+## Android: "it builds" must mean the release build, and "it works" means run it (2026-11-19)
+
+- I had declared the Android work done after `assembleDebug` + unit tests. The **release**
+  build (what Android Studio exports) was broken twice over: launcher icons were JPEGs
+  named `.png` (debug does not crunch PNGs, release does), and a lint-vital error on the
+  WorkManager manifest entry. Rule: for Android always run `assembleRelease` as well.
+- That manifest entry also meant the background alert worker could never be created, so
+  "background polling fixed" in Phase 1 was untrue on a device. Unit tests cannot see
+  this. Rule: anything involving WorkManager, the WebView, notifications or sign-in is
+  verified on the emulator (AVD `Pixel_7`, driver script pattern: adb + uiautomator dump),
+  not inferred from a compile.
+- Emulator gotchas: `adb shell input text` drops everything after a hyphen (send
+  KEYCODE_MINUS); WorkManager jobs live in the `androidx.work.systemjobscheduler`
+  namespace and cannot be forced before their period; set `MSYS_NO_PATHCONV=1` in Git Bash.
+- A web page without `Cache-Control` is cached heuristically for hours by browsers and the
+  WebView, so a dashboard deploy looked like it "did not work" in the app. The dashboard
+  now sends `no-cache`. After any frontend deploy, check the header, not only HTTP 200.
