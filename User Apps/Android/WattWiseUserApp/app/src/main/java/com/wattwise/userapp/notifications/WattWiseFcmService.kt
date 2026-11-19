@@ -25,6 +25,33 @@ import com.wattwise.userapp.util.Constants
 object WattWiseFcmService {
 
     private const val TAG = "WattWiseNotif"
+    private const val GROUP_ALERTS = "wattwise_alerts"
+    private const val SUMMARY_ID = 0x57415454   // fixed id: one summary, updated in place
+
+    /**
+     * Android bundles several alerts under one header. Without our own summary, tapping
+     * that header only opened the app on its home tab; this one opens the Alerts tab.
+     */
+    private fun postGroupSummary(context: Context, manager: NotificationManager) {
+        val intent = WattWiseNotificationRouter.buildLaunchIntent(
+            context, Bundle().apply { putString("tab", "notifications") }
+        )
+        val pending = PendingIntent.getActivity(
+            context, SUMMARY_ID, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val summary = NotificationCompat.Builder(context, Constants.NOTIFICATION_CHANNEL_ID_INFO)
+            .setSmallIcon(R.drawable.ic_notification_wattwise)
+            .setContentTitle("WattWise alerts")
+            .setContentText("Tap to see your alerts")
+            .setGroup(GROUP_ALERTS)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .build()
+        manager.notify(SUMMARY_ID, summary)
+    }
 
     /**
      * Display a system notification without FCM.
@@ -74,6 +101,7 @@ object WattWiseFcmService {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setCategory(category)
+            .setGroup(GROUP_ALERTS)
 
         if (type == "critical" || type == "opportunity") {
             val actionBundle = Bundle(dataBundle)
@@ -92,6 +120,7 @@ object WattWiseFcmService {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notifId = historyId?.hashCode() ?: System.currentTimeMillis().toInt()
         manager.notify(notifId, notification)
+        postGroupSummary(context, manager)
 
         Log.d(TAG, "Notification displayed: id=$notifId channel=$channelId")
     }

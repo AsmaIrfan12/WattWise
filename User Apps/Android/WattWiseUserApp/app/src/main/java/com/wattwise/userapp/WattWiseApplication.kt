@@ -86,11 +86,14 @@ class WattWiseApplication : Application(), Configuration.Provider {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
 
-        // UPDATE keeps the existing schedule but applies this version's settings
-        // (KEEP left installs upgraded from an older build on the old request forever).
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+        val workManager = WorkManager.getInstance(this)
+        // The schedule from builds before 4.1 (no network constraint) is replaced by a
+        // new, differently named one. KEEP then leaves it alone on later starts:
+        // re-registering on every start cancelled a check that was in progress.
+        workManager.cancelUniqueWork(NotificationPollWorker.LEGACY_WORK_NAME)
+        workManager.enqueueUniquePeriodicWork(
             NotificationPollWorker.WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
+            ExistingPeriodicWorkPolicy.KEEP,
             request
         )
         Timber.d("⏱ NotificationPollWorker enqueued (15-min interval)")

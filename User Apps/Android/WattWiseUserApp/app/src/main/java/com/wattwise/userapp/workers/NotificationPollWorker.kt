@@ -12,6 +12,7 @@ import com.wattwise.userapp.notifications.WattWiseFcmService
 import com.wattwise.userapp.util.AlertSelection
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import java.io.IOException
@@ -71,6 +72,8 @@ class NotificationPollWorker @AssistedInject constructor(
                     Result.success()
                 }
             }
+        } catch (e: CancellationException) {
+            throw e                              // stopped by the system: not a failure
         } catch (e: IOException) {
             Result.retry()                       // offline or server unreachable
         } catch (e: Exception) {
@@ -80,6 +83,7 @@ class NotificationPollWorker @AssistedInject constructor(
     }
 
     companion object {
-        const val WORK_NAME = "wattwise_notification_poll"
+        const val WORK_NAME = "wattwise_alert_check_v2"
+        const val LEGACY_WORK_NAME = "wattwise_notification_poll"
     }
 }
