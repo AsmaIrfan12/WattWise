@@ -156,8 +156,7 @@ async def get_user_details(user_id: int, request: Request, db: AsyncSession = De
 
     homes_result = await db.execute(select(Home).where(Home.user_id == user_id))
     homes = homes_result.scalars().all()
-    # Synthetic users only ever have simulated decisions; show those for them.
-    impact = await DecisionTracker.get_user_impact_report(db, user_id, include_simulated=bool(user.is_synthetic))
+    impact = await DecisionTracker.get_user_impact_report(db, user_id)
 
     devices_by_home: dict[int, list] = {}
     if homes:
@@ -214,6 +213,7 @@ async def get_user_details(user_id: int, request: Request, db: AsyncSession = De
         "recent_notifications": [{
             "id": n.id, "type": n.notification_type, "source": n.source, "severity": n.severity,
             "title": n.title, "requires_user_action": n.requires_user_action,
+            "health_tip": n.metadata_json.get("health_tip") if isinstance(n.metadata_json, dict) else None,
             "read": n.is_read, "opened_at": n.opened_at, "created_at": n.created_at,
             "decision": None if d is None else {
                 "id": d.id, "decision_type": d.decision_type, "action_taken": d.action_taken,
@@ -510,7 +510,7 @@ async def get_rankings(
     request: Request, db: AsyncSession = Depends(get_db),
     period: str = Query(default="DAILY", pattern="^(DAILY|WEEKLY|MONTHLY)$"),
     date_str: Optional[str] = Query(default=None),
-    cohort: str = Query(default="real"),
+    cohort: str = Query(default="all"),
 ):
     """
     Return rankings for a single period.
@@ -520,7 +520,8 @@ async def get_rankings(
       list of available period_starts so the UI can build a navigator.
     """
     _require_admin(request)
-    # Rankings are computed separately for real and synthetic homes (see scheduler.compute_rankings).
+    # There is ONE community ranking (see scheduler.compute_rankings). `cohort` only narrows
+    # which rows are listed; positions are always the home's place among all homes.
     cohort = normalise_cohort(cohort)
     in_cohort = [] if cohort == "all" else [
         EnergyRanking.user_id.in_(select(User.id).where(User.is_synthetic.is_(cohort == "synthetic")))
@@ -712,9 +713,9 @@ async def get_personas_history(
 
 @router.get("/analytics/decisions")
 async def get_decision_analytics(
-    request: Request, db: AsyncSession = Depends(get_db), cohort: str = Query(default="real"),
+    request: Request, db: AsyncSession = Depends(get_db), cohort: str = Query(default="all"),
 ):
-    """Decision impact totals for one cohort (real by default — simulated rows never count as real)."""
+    """Decision impact totals. All accounts by default; `cohort` narrows on request."""
     _require_admin(request)
     return await DecisionTracker.get_system_impact_report(db, normalise_cohort(cohort))
 
@@ -1638,9 +1639,10 @@ async def simulate_user_decisions(
     via query params. Each row is given a plausible response_time_seconds,
     energy_before/after, energy_saved, and an effectiveness_score.
 
-    Admin only. Demo data: it is written ONLY against synthetic users
-    (users.is_synthetic) and every row is flagged is_simulated, so it can never be
-    mistaken for — or block — a real participant's response.
+    Admin only. Like the readings generator, this writes ONLY to synthetic accounts:
+    an account with a real person behind it answers its own alerts, and a generated
+    answer would block that person from responding. Every row is flagged is_simulated.
+    Downstream (rankings, analytics, personas) these decisions count like any other.
     """
     import random
 
@@ -1762,7 +1764,7 @@ async def simulate_user_decisions(
             "reject": round(reject_rate, 2),
         },
         "message": (f"Simulated {sum(counts.values())} decisions for synthetic users on alerts from the last "
-                    f"{notification_window_days} days (flagged is_simulated; not counted in the Real cohort)"),
+                    f"{notification_window_days} days (flagged is_simulated)"),
     }
 
 
@@ -2009,6 +2011,8 @@ async def trigger_smart_notifications_all(
                             "appliance_key": device.appliance_key,
                             "priority": alert.get("priority"),
                             "scenario": alert.get("scenario"),
+                            "health_tip": alert.get("health_tip"),
+                            "energy_message": alert.get("energy_message"),
                             "efficiency_score": payload.get("efficiency_score"),
                         },
                     )

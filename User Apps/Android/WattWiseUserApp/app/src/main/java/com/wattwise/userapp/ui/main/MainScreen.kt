@@ -2,6 +2,9 @@ package com.wattwise.userapp.ui.main
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.content.pm.PackageManager
@@ -9,6 +12,7 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Build
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.SslErrorHandler
@@ -20,6 +24,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONObject
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -83,6 +88,12 @@ import com.wattwise.userapp.BuildConfig
 import com.wattwise.userapp.util.DeepLinks
 import kotlinx.coroutines.launch
 import timber.log.Timber
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
@@ -183,6 +194,23 @@ fun MainScreen(
         }
     }
 
+    // ── Back button ──────────────────────────────────────────────────────
+    // Back belongs to the dashboard first: it closes whatever is open, returns to the
+    // previous section, then to Home. Only when the dashboard has nothing left to go
+    // back to does the app step into the background (it is not destroyed, so it
+    // reopens where it was). Before this, Back closed the app from any section.
+    BackHandler(enabled = true) {
+        val leaveApp: () -> Unit = { context.findActivity()?.moveTaskToBack(true) }
+        val wv = webViewRef
+        if (wv == null || !pageReady) {
+            leaveApp()
+        } else {
+            wv.evaluateJavascript(DeepLinks.BACK_JS) { answer ->
+                if (!DeepLinks.dashboardHandledBack(answer)) leaveApp()
+            }
+        }
+    }
+
     // ── Re-inject JWT after settings save ────────────────────────────────
     // Fires whenever webUrl changes (e.g. server URL or port edited in Settings).
     // Re-injects the token into WebView localStorage so the web frontend
@@ -207,7 +235,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {},
+                title = { Text("WattWise", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { webViewRef?.reload() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -247,6 +275,11 @@ fun MainScreen(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
+
+                                // Debug builds only: lets chrome://inspect attach to the dashboard
+                                // exactly as this WebView renders it (desktop browsers lay the
+                                // page out differently from a phone WebView).
+                                if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
 
                                 CookieManager.getInstance().setAcceptCookie(true)
                                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -403,6 +436,17 @@ fun MainScreen(
                                 webChromeClient = object : WebChromeClient() {
                                     override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                         progress = newProgress
+                                    }
+
+                                    // Debug builds: surface the page's own warnings and errors in
+                                    // logcat, so a section that fails to open can be diagnosed.
+                                    override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                                        val level = message?.messageLevel()
+                                        if (BuildConfig.DEBUG && (level == ConsoleMessage.MessageLevel.ERROR ||
+                                                    level == ConsoleMessage.MessageLevel.WARNING)) {
+                                            Timber.w("Dashboard console: ${message?.message()} (line ${message?.lineNumber()})")
+                                        }
+                                        return true
                                     }
 
                                     override fun onGeolocationPermissionsShowPrompt(

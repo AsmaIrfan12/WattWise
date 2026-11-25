@@ -1,16 +1,18 @@
 """
-Real vs synthetic cohorts
-=========================
-The deployment mixes real participants (an RPi in their home) with synthetic
-demo homes fed by dummy_data_sender.py, and real decisions with rows written by
-the admin "decision simulator". Research analytics must be able to tell them
-apart, so every admin analytic takes a `cohort`:
+Account groups (cohorts)
+========================
+WattWise treats every account the same way: real participants and synthetic homes are
+ranked together, analysed together and alerted by the same rules. That is the default
+everywhere (`cohort=all`).
 
-    real       — users with is_synthetic = 0, decisions with is_simulated = 0   (default)
-    synthetic  — users with is_synthetic = 1 (simulated decisions included)
-    all        — everything
+`users.is_synthetic` and `user_decisions.is_simulated` are kept as labels, so an admin
+can still NARROW a view on request:
 
-`users.is_synthetic` and `user_decisions.is_simulated` are the only sources of truth.
+    all        every account and every decision                        (default)
+    real       users with is_synthetic = 0, decisions with is_simulated = 0
+    synthetic  users with is_synthetic = 1
+
+Nothing in the system filters on these labels unless a caller asks for it.
 """
 from typing import Optional
 
@@ -19,7 +21,7 @@ from fastapi import HTTPException
 from app.models import User, UserDecision
 
 COHORTS = ("real", "synthetic", "all")
-DEFAULT_COHORT = "real"
+DEFAULT_COHORT = "all"
 
 
 def normalise_cohort(cohort: Optional[str]) -> str:
@@ -41,8 +43,7 @@ def user_cohort_clause(cohort: str):
 def decision_cohort_clause(cohort: str):
     """
     WHERE clause on UserDecision for a cohort, or None when nothing is excluded.
-    Real analytics never include simulated decisions, even if one was (wrongly)
-    written against a real user.
+    Only the explicit "real" filter leaves simulated decisions out.
     """
     if cohort == "real":
         return UserDecision.is_simulated.is_(False)

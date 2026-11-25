@@ -229,8 +229,6 @@ async def _extract_features(db: AsyncSession, user: User, cutoff_30d, inactive_c
         ).where(
             UserDecision.user_id == user.id,
             UserDecision.created_at >= datetime.combine(cutoff_30d, datetime.min.time()),
-            # Simulated demo decisions describe behaviour only for synthetic users.
-            *([] if getattr(user, "is_synthetic", False) else [UserDecision.is_simulated.is_(False)]),
         )
     )).one()
     total_dec = int(dec_row.total or 0)

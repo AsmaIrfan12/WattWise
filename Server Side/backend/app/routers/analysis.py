@@ -156,17 +156,11 @@ async def get_leaderboard(
     else:
         target_date = date.today() - timedelta(days=1)
 
-    # A user only ever sees their own cohort: real participants are ranked among real
-    # homes, synthetic demo accounts among synthetic ones.
-    viewer_is_synthetic = bool((await db.execute(
-        select(User.is_synthetic).where(User.id == user_id)
-    )).scalar_one_or_none())
+    # One community leaderboard: every home is ranked in the same list, and every
+    # user sees that same list.
     result = await db.execute(
         select(EnergyRanking)
-        .where(
-            EnergyRanking.period_type == period, EnergyRanking.period_start == target_date,
-            EnergyRanking.user_id.in_(select(User.id).where(User.is_synthetic.is_(viewer_is_synthetic))),
-        )
+        .where(EnergyRanking.period_type == period, EnergyRanking.period_start == target_date)
         .order_by(EnergyRanking.rank_position.asc())
         .limit(50)
     )

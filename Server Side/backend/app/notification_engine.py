@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.health_tips import HEALTH_TIP_LABEL, pick_health_tip, with_health_tip
 from app.models import (
     User, Notification, Device, Home, DailySummary, HomeDailyTotal, EnergyGoal, NotificationCampaign,
 )
@@ -95,6 +96,26 @@ class NotificationEngine:
             if duplicate is not None:
                 logger.debug(f"Skipping duplicate {dedup_key} for user {user_id}")
                 return None
+
+        # Health tip: every automated alert about a device ends with one, as in the
+        # original app. Scenario alerts arrive with the tip for their scenario already in
+        # the text; the others (unusual usage, device goals, standby) get a general tip
+        # for the appliance here, rotated daily. The two parts are also kept separately.
+        if (source == "AUTOMATED" and device_id is not None
+                and not (metadata or {}).get("health_tip") and HEALTH_TIP_LABEL not in message):
+            try:
+                appliance_key = (metadata or {}).get("appliance_key")
+                if not appliance_key:
+                    appliance_key = (await db.execute(
+                        select(Device.appliance_key).where(Device.id == device_id)
+                    )).scalar_one_or_none()
+                if isinstance(appliance_key, str) and appliance_key:
+                    seed = datetime.utcnow().timetuple().tm_yday + int(device_id)
+                    tip = pick_health_tip(appliance_key, seed)
+                    metadata = {**(metadata or {}), "health_tip": tip, "energy_message": message}
+                    message = with_health_tip(message, tip)
+            except Exception as e:  # a tip must never stop an alert from being delivered
+                logger.warning("Health tip not attached to alert for device %s: %s", device_id, e)
 
         # Create notification record
         notif = Notification(
@@ -779,6 +800,8 @@ class NotificationEngine:
                                     "appliance_key": device.appliance_key,
                                     "priority": alert["priority"],
                                     "scenario": alert["scenario"],
+                                    "health_tip": alert.get("health_tip"),
+                                    "energy_message": alert.get("energy_message"),
                                     "efficiency_score": optimization["efficiency_score"],
                                 },
                                 send_push=True,

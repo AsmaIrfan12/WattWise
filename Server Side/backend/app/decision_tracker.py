@@ -319,8 +319,8 @@ class DecisionTracker:
     # ── Aggregate Statistics ──────────────────────────────────
 
     @staticmethod
-    async def get_user_impact_report(db: AsyncSession, user_id: int, include_simulated: bool = False) -> dict:
-        """Return aggregate decision impact statistics for a user (real decisions only by default)."""
+    async def get_user_impact_report(db: AsyncSession, user_id: int, include_simulated: bool = True) -> dict:
+        """Aggregate decision impact for a user: all of that user's decisions, the same rule for every account."""
         q = select(
             func.count(UserDecision.id).label("total"),
             func.sum(case((UserDecision.decision_type == "ACCEPTED", 1), else_=0)).label("accepted"),
@@ -349,7 +349,7 @@ class DecisionTracker:
         }
 
     @staticmethod
-    async def get_system_impact_report(db: AsyncSession, cohort: str = "real") -> dict:
+    async def get_system_impact_report(db: AsyncSession, cohort: str = "all") -> dict:
         """System-wide decision impact statistics for admin, for one cohort (see app.cohorts)."""
         from app.cohorts import user_cohort_clause, decision_cohort_clause
 

@@ -61,4 +61,15 @@ class DeepLinksTest {
         assertFalse(DeepLinks.looksLikeJwt("aaaaaaaaaa.bbbbbbbbbb"))
         assertFalse(DeepLinks.looksLikeJwt("aaaaaaaaaa.bbbbbbbbbb.cc');alert(1)//"))
     }
+
+    @Test
+    fun `back belongs to the dashboard only when it says so`() {
+        assertTrue(DeepLinks.dashboardHandledBack("true"))
+        assertTrue(DeepLinks.dashboardHandledBack(" true\n"))
+        assertFalse(DeepLinks.dashboardHandledBack("false"))
+        assertFalse(DeepLinks.dashboardHandledBack("null"))        // older dashboard without the hook
+        assertFalse(DeepLinks.dashboardHandledBack("\"true\""))    // a string, not the boolean
+        assertFalse(DeepLinks.dashboardHandledBack(null))
+        assertFalse(DeepLinks.BACK_JS.contains("$"))               // a constant: no interpolation
+    }
 }

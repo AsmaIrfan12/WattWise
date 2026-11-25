@@ -32,6 +32,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import User, Home, Room, Device, DailySummary
 from app.appliance_scenarios import calculate_optimization, APPLIANCE_BASE_ENERGY
+from app.health_tips import pick_health_tip
 from app.notification_engine import NotificationEngine
 
 logger = logging.getLogger("smart_notifications_router")
@@ -428,6 +429,8 @@ async def trigger_smart_notifications(
                         "appliance_key": device.appliance_key,
                         "priority": alert["priority"],
                         "scenario": alert["scenario"],
+                        "health_tip": alert.get("health_tip"),
+                        "energy_message": alert.get("energy_message"),
                         "efficiency_score": optimization["efficiency_score"],
                     },
                     send_push=send_push,
@@ -445,6 +448,31 @@ async def trigger_smart_notifications(
         "message": f"Smart notification trigger complete — {len(sent)} new notifications created",
         "sent_count": len(sent),
         "notifications": sent,
+    }
+
+
+def _health_tip_of_the_day(devices: list[dict]) -> Optional[dict]:
+    """
+    One health suggestion for the home screen. A device with an alert right now comes
+    first (its tip is the most relevant); otherwise the tip changes daily and cycles
+    through the caller's own appliances.
+    """
+    if not devices:
+        return None
+    from datetime import date as _date
+    day = _date.today().timetuple().tm_yday
+    flagged = [d for d in devices if d.get("alerts") and d.get("health_tip")]
+    if flagged:
+        chosen, tip = flagged[0], flagged[0]["health_tip"]
+    else:
+        ordered = sorted(devices, key=lambda d: d["device_id"])
+        chosen = ordered[day % len(ordered)]
+        tip = pick_health_tip(chosen.get("appliance_key"), day // len(ordered))
+    return {
+        "device_id": chosen["device_id"],
+        "device_name": chosen["device_name"],
+        "appliance_key": chosen.get("appliance_key"),
+        "tip": tip,
     }
 
 
@@ -568,6 +596,8 @@ async def check_all_devices(
             ),
             "alerts": opt.get("alerts", []),
             "recommendations": opt.get("recommendations", []),
+            "health_tip": opt.get("health_tip"),
+            "health_tips": opt.get("health_tips", []),
         })
 
     # Sort: ok → review → delay
@@ -579,6 +609,7 @@ async def check_all_devices(
         summary_counts[r["verdict"]] = summary_counts.get(r["verdict"], 0) + 1
 
     return {
+        "health_tip_of_the_day": _health_tip_of_the_day(results),
         "is_peak_time": is_peak,
         "current_tariff_pence_per_kwh": round(settings.get_current_tariff() * 100, 1),
         "verdict_summary": (

@@ -51,7 +51,7 @@ def home_state(last_seen_at, mqtt_username, now: datetime, offline_after_minutes
 async def homes_status(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    cohort: str = Query(default="real"),
+    cohort: str = Query(default="all"),
 ):
     """Every home with its owner, broker identity, device count and when it was last heard from."""
     _require_admin(request)

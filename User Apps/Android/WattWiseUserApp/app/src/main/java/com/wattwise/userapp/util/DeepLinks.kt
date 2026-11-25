@@ -40,6 +40,18 @@ object DeepLinks {
         return "window.goSection?.('$safeTab');"
     }
 
+    /**
+     * Asks the dashboard to handle Back. The page closes whatever is open on top, then
+     * returns to the previous section, then to Home, and answers true; it answers false
+     * when there is nothing left to go back to (or it is an older page without the hook).
+     * A constant: nothing from outside is ever placed in it.
+     */
+    const val BACK_JS =
+        "(function(){try{return !!(window.wwHandleBack&&window.wwHandleBack());}catch(e){return false;}})()"
+
+    /** True when the dashboard's answer to [BACK_JS] says it handled Back itself. */
+    fun dashboardHandledBack(jsResult: String?): Boolean = jsResult?.trim() == "true"
+
     /** Three base64url segments: the shape of a session token, nothing else. */
     fun looksLikeJwt(token: String?): Boolean {
         if (token == null || token.length !in 20..4096) return false

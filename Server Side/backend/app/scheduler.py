@@ -313,6 +313,17 @@ def decision_response_score(actionable: int, decided: int, avg_effectiveness: fl
     return round(50.0 * response_rate + 0.5 * effectiveness, 1)
 
 
+def community_rank(position: int, total_homes: int) -> tuple[int, int, float]:
+    """
+    (rank, total, percentile) for the home at `position` (0-based, best first) in the
+    ONE community list. Every home with data in the period is in that list: there is no
+    separate ranking for real and synthetic homes.
+    """
+    rank = position + 1
+    percentile = ((total_homes - rank) / max(total_homes - 1, 1)) * 100
+    return rank, total_homes, round(percentile, 1)
+
+
 async def compute_rankings(target_date: date = None, period_type: str = "DAILY"):
     """
     Compute energy-efficiency rankings for all homes for a given period.
@@ -358,28 +369,22 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 Home.user_id,
                 Home.home_name,
                 Home.num_occupants,
-                User.is_synthetic,
                 func.sum(HomeDailyTotal.total_kwh).label("total_kwh"),
                 func.sum(HomeDailyTotal.total_cost_gbp).label("total_cost"),
             )
             .join(HomeDailyTotal, HomeDailyTotal.home_id == Home.id)
-            .join(User, User.id == Home.user_id)
             .where(
                 HomeDailyTotal.day_date >= period_start,
                 HomeDailyTotal.day_date <= period_end,
             )
-            .group_by(Home.id, Home.user_id, Home.home_name, Home.num_occupants, User.is_synthetic)
+            .group_by(Home.id, Home.user_id, Home.home_name, Home.num_occupants)
             .order_by(func.sum(HomeDailyTotal.total_kwh).asc())  # Lower usage = better
         )
         rows = result.all()
         total_users = len(rows)
 
-        # Real participants and synthetic demo homes are ranked separately: a real
-        # home's position must not depend on generated data.
-        cohort_size: dict[bool, int] = {}
-        for r in rows:
-            cohort_size[bool(r.is_synthetic)] = cohort_size.get(bool(r.is_synthetic), 0) + 1
-        cohort_rank: dict[bool, int] = {}
+        # One community: every home with data in the period is ranked in the same list,
+        # whether its readings come from a Raspberry Pi or from the data generator.
 
         # Period length in days — used to scale per-day goals up to the period
         period_days = (period_end - period_start).days + 1
@@ -395,7 +400,6 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
         goal_by_user = {uid: goal for uid, goal in goal_rows.all()}
 
         from app.models import Notification
-        synthetic_user = {r.user_id: bool(r.is_synthetic) for r in rows}
         period_from = datetime.combine(period_start, datetime.min.time())
         period_to = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
 
@@ -424,15 +428,16 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
             )
             .group_by(UserDecision.user_id, UserDecision.is_simulated)
         )
-        # Simulated decisions only ever count for synthetic users.
+        # Every recorded decision counts the same way for every user.
         decided_by_user: dict[int, int] = {}
-        effectiveness_by_user: dict[int, float] = {}
-        for uid, simulated, n, avg_eff in dec_rows.all():
-            if simulated and not synthetic_user.get(uid):
-                continue
+        eff_sum: dict[int, float] = {}
+        eff_n: dict[int, int] = {}
+        for uid, _simulated, n, avg_eff in dec_rows.all():
             decided_by_user[uid] = decided_by_user.get(uid, 0) + int(n)
             if avg_eff is not None:
-                effectiveness_by_user[uid] = float(avg_eff)
+                eff_sum[uid] = eff_sum.get(uid, 0.0) + float(avg_eff) * int(n)
+                eff_n[uid] = eff_n.get(uid, 0) + int(n)
+        effectiveness_by_user = {uid: eff_sum[uid] / eff_n[uid] for uid in eff_sum if eff_n.get(uid)}
 
         existing_rows = await db.execute(
             select(EnergyRanking).where(
@@ -443,11 +448,9 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
         )
         ranking_by_user = {r.user_id: r for r in existing_rows.scalars().all()}
 
-        for hdt in rows:
+        for position, hdt in enumerate(rows):
             try:
-                cohort_key = bool(hdt.is_synthetic)
-                rank = cohort_rank[cohort_key] = cohort_rank.get(cohort_key, 0) + 1
-                total_users = cohort_size[cohort_key]
+                rank, total_users, percentile = community_rank(position, len(rows))
                 occupants = max((hdt.num_occupants or 1), 1)
                 # Per-occupant per-day usage normalises across home size + period length
                 kwh_per_person_per_day = float(hdt.total_kwh) / occupants / max(period_days, 1)
@@ -469,7 +472,6 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
                 )
 
                 overall = (eff_score * 0.4 + adherence * 0.35 + float(avg_decision_score) * 0.25)
-                percentile = ((total_users - rank) / max(total_users - 1, 1)) * 100
 
                 ranking = ranking_by_user.get(hdt.user_id)
                 if ranking:

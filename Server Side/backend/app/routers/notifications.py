@@ -73,6 +73,12 @@ async def _to_responses(db: AsyncSession, user_id: int, notifs: list[Notificatio
         # `decision` relationship, which cannot load inside an async session.
         resp = NotificationResponse.model_validate({c.name: getattr(n, c.name) for c in _COLUMNS})
         resp.is_expired = bool(n.expires_at and n.expires_at < now)
+        if isinstance(n.metadata_json, dict):
+            resp.health_tip = n.metadata_json.get("health_tip") or None
+            # Only when the stored text really is "<energy message> … <tip>".
+            energy = n.metadata_json.get("energy_message")
+            if resp.health_tip and isinstance(energy, str) and n.message.startswith(energy):
+                resp.energy_message = energy
         dev = devices.get(n.device_id)
         if dev:
             resp.device_name = dev.name

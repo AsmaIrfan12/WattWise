@@ -5,7 +5,7 @@ This is the admin's view of the core loop: for every alert (automated or sent by
 hand) who received it, who opened it, what they decided, what they reported doing,
 and what the measured energy effect was.
 
-All endpoints take `cohort` (real | synthetic | all, default real) — see app.cohorts.
+All endpoints take `cohort` (all | real | synthetic, default all) — see app.cohorts.
 """
 import csv
 import io
@@ -42,6 +42,7 @@ def _iso(value) -> Optional[str]:
 DECISION_COLUMNS = [
     "decision_id", "user_id", "user_name", "user_email", "persona", "is_synthetic", "is_simulated",
     "notification_id", "alert_type", "alert_source", "alert_rule", "campaign_id", "alert_title", "alert_severity",
+    "health_tip",
     "alert_created_at", "alert_opened_at", "device_name", "appliance_key",
     "decision_type", "action_taken", "user_feedback_text", "user_satisfaction",
     "decided_at", "updated_at", "response_time_seconds",
@@ -103,6 +104,8 @@ def _decision_row(d: UserDecision, u: User, n: Optional[Notification], dev: Opti
         "campaign_id": n.campaign_id if n else None,
         "alert_title": n.title if n else None,
         "alert_severity": n.severity if n else None,
+        # The health suggestion the user saw with this alert (None for alerts without one).
+        "health_tip": (n.metadata_json or {}).get("health_tip") if n and isinstance(n.metadata_json, dict) else None,
         "alert_created_at": _iso(n.created_at) if n else _iso(d.notification_sent_at),
         "alert_opened_at": _iso(n.opened_at) if n else None,
         "device_name": dev.name if dev else None,
@@ -128,7 +131,7 @@ def _decision_row(d: UserDecision, u: User, n: Optional[Notification], dev: Opti
 async def list_decisions(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    cohort: str = Query(default="real"),
+    cohort: str = Query(default="all"),
     user_id: Optional[int] = Query(default=None),
     decision_type: Optional[str] = Query(default=None, pattern="^(ACCEPTED|REJECTED|DEFERRED|CUSTOM_ACTION)$"),
     notification_type: Optional[str] = Query(default=None, max_length=32),
@@ -238,7 +241,7 @@ def _decision_join(cohort: str):
 async def notification_funnel(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    cohort: str = Query(default="real"),
+    cohort: str = Query(default="all"),
     days: int = Query(default=30, ge=1, le=365),
     source: Optional[str] = Query(default=None, pattern="^(AUTOMATED|ADMIN)$"),
 ):

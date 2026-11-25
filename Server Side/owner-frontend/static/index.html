@@ -18,6 +18,10 @@
 <style>
 .cohort-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9ca3af; margin-right: 10px; }
 .cohort-note { font-size: 11px; font-weight: 500; color: #9ca3af; margin-left: 6px; }
+/* Sankey labels follow the theme: light text on dark, dark text on light. They used a
+   fixed pale colour, which was unreadable on the light theme's white background. */
+.sankey-label { fill: var(--text-primary); }
+body.light-mode #sankey-summary { color: var(--text-secondary) !important; }
 .form-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #d1d5db; margin: 4px 0 10px; }
 .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 10px 4px 0; font-size: 12px; color: #9ca3af; }
 .dx-note { font-size: 11px; color: #9ca3af; font-style: italic; max-width: 280px; }
@@ -94,12 +98,12 @@ tr.row-click { cursor: pointer; }
       <h1 class="page-title" id="page-title">Dashboard</h1>
     </div>
     <div class="topbar-right">
-      <label class="cohort-switch" title="Which accounts the numbers include. Real = participants with a device in their home; Synthetic = demo accounts fed by the data generator.">
-        Data
+      <label class="cohort-switch" title="Every account is treated the same way and shown together. Use this only to narrow the view: Real = homes with a Raspberry Pi; Synthetic = homes fed by the data generator.">
+        Show
         <select id="cohort-switch" class="select-sm">
-          <option value="real">Real participants</option>
-          <option value="synthetic">Synthetic (demo)</option>
-          <option value="all">All</option>
+          <option value="all">All accounts</option>
+          <option value="real">Real only</option>
+          <option value="synthetic">Synthetic only</option>
         </select>
       </label>
       <button class="btn-icon" id="btn-theme-toggle" aria-label="Toggle Theme" style="margin-right:8px">☀️</button>

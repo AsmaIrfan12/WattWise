@@ -134,8 +134,10 @@ function doLogout() {
 
 
 // ── Cohort (real / synthetic / all) ───────────────────────────
-// Real participants and synthetic demo accounts are never mixed unless "All" is chosen.
-let _cohort = sessionStorage.getItem('ww_admin_cohort') || 'real';
+// Every account is treated the same way, so "all" is the default. Real / Synthetic
+// only narrow the view when the admin asks for it. (New storage key: a tab that had
+// the old "real" default saved must not keep hiding the synthetic homes.)
+let _cohort = sessionStorage.getItem('ww_admin_show') || 'all';
 const COHORT_LABELS = { real: 'real participants', synthetic: 'synthetic demo accounts', all: 'all accounts' };
 function cohortQS(prefix = '&') { return `${prefix}cohort=${_cohort}`; }
 function paintCohortLabels() {
@@ -310,7 +312,7 @@ function initDecisionsUi() {
   paintCohortLabels();
   document.getElementById('cohort-switch').addEventListener('change', e => {
     _cohort = e.target.value;
-    sessionStorage.setItem('ww_admin_cohort', _cohort);
+    sessionStorage.setItem('ww_admin_show', _cohort);
     paintCohortLabels();
     const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'dashboard';
     navigateTo(active);
@@ -1300,7 +1302,7 @@ async function openUserPanel(userId) {
       <div class="detail-section">
         <div class="detail-section-title">Recent alerts and responses</div>
         ${(d.recent_notifications || []).map(n => `<div class="detail-row" style="align-items:flex-start">
-            <span class="detail-key" style="max-width:62%">${h(n.title)}<div class="dx-note">${fmtWhen(n.created_at)} · ${n.source === 'ADMIN' ? 'admin send' : h(n.type)}${n.opened_at ? ' · opened' : n.read ? ' · seen' : ' · not seen'}</div></span>
+            <span class="detail-key" style="max-width:62%">${h(n.title)}<div class="dx-note">${fmtWhen(n.created_at)} · ${n.source === 'ADMIN' ? 'admin send' : h(n.type)}${n.opened_at ? ' · opened' : n.read ? ' · seen' : ' · not seen'}</div>${n.health_tip ? `<div class="dx-note">💚 ${h(n.health_tip)}</div>` : ''}</span>
             <span class="detail-val" style="text-align:right">${n.decision ? (DECISION_LABELS[n.decision.decision_type] || h(n.decision.decision_type)) + (n.decision.is_simulated ? ' <span class="tag-sim">simulated</span>' : '') : (n.requires_user_action ? '<span style="color:#f59e0b">no response</span>' : '—')}${n.decision?.action_taken ? `<div class="dx-note">${h(n.decision.action_taken)}</div>` : ''}</span>
           </div>`).join('') || '<div class="detail-row"><span class="detail-key">No alerts yet</span></div>'}
       </div>
@@ -2567,7 +2569,7 @@ async function loadSankey() {
       .attr('y', d => (d.y0 + d.y1) / 2)
       .attr('dy', '0.35em')
       .attr('text-anchor', d => d.x0 < width / 2 ? 'start' : 'end')
-      .style('fill', '#cbd5e1')
+      .attr('class', 'sankey-label')
       .style('font-size', '10px')
       .text(d => d.id.length > 28 ? d.id.slice(0, 26) + '…' : d.id);
 

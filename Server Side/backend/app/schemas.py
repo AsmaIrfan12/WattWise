@@ -215,6 +215,10 @@ class NotificationResponse(BaseModel):
     action_button_text: Optional[str]
     requires_user_action: bool
     metadata_json: Optional[dict]
+    # `message` is the whole notification, ending with its health tip. These two are the
+    # same text in parts (from metadata_json), so a client can lay them out separately.
+    health_tip: Optional[str] = None
+    energy_message: Optional[str] = None
     is_read: bool
     read_at: Optional[datetime] = None
     opened_at: Optional[datetime] = None

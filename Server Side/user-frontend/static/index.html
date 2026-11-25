@@ -31,7 +31,14 @@
   --trans:    0.2s ease;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
+/* Nothing may make the page wider than the screen. A canvas has an intrinsic width of
+   300px and a flex or grid item refuses to shrink below its content, so one chart in a
+   narrow column pushed the whole page (and the fixed tab bar with it) off the right edge
+   of a phone. */
+canvas { max-width: 100%; }
+.grid2 > *, .kpi-grid > *, .card, .device-insights { min-width: 0; }
+section { max-width: 100%; }
 body {
   font-family: 'Inter', -apple-system, sans-serif;
   background: var(--bg);
@@ -75,6 +82,7 @@ body {
   white-space: nowrap; transition: all var(--trans);
   position: relative;
 }
+.tab { display: inline-flex; align-items: center; gap: 5px; }
 .tab.active { background: rgba(22,163,74,.15); color: var(--t); }
 .tab:hover { background: var(--surf2); color: var(--t2); }
 .notif-badge {
@@ -347,13 +355,59 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
 /* ── Empty state ─────────────────────────────────────────────── */
 .empty { color: var(--mu); font-size: .875rem; padding: 28px 0; text-align: center; }
 
+/* ── Health suggestions ──────────────────────────────────────── */
+.health-tip {
+  font-size: .74rem; line-height: 1.45; color: #bbf7d0;
+  background: rgba(34,197,94,.10); border-left: 3px solid #22c55e;
+  border-radius: 6px; padding: 6px 9px; margin-top: 6px;
+}
+.health-card { display: flex; align-items: center; gap: 14px; padding: 14px 18px; margin-bottom: 14px; border-left: 3px solid #22c55e; }
+.health-ico { font-size: 22px; }
+.health-dev { font-weight: 500; color: var(--mu); font-size: .72rem; margin-left: 6px; text-transform: none; letter-spacing: 0; }
+.health-text { font-size: .82rem; color: var(--t2); line-height: 1.45; }
+.device-health { font-size: .7rem; color: #86efac; margin-top: 3px; line-height: 1.35; }
+.health-panel { margin-top: 14px; }
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .grid2 { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .topbar { padding: 0 12px; }
   .content { padding: 14px; }
+  .health-card { flex-wrap: wrap; }
 }
+
+/* Phones, tablets and the Android app: the seven sections do not fit beside the logo
+   and the profile, where they were squeezed into a strip showing one tab (the rest
+   could only be reached by swiping a strip with no hint that it scrolled). Below
+   900px they become a fixed bar along the bottom with every section always visible. */
+@media (max-width: 900px) {
+  /* The header must not blur its backdrop here: an element with backdrop-filter becomes
+     the anchor for position:fixed children, which pinned the bar to the header itself. */
+  .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: #1e293b; }
+  .nav-tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+    gap: 0; overflow: visible;
+    background: rgba(30,41,59,0.97); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--bd);
+    padding: 4px 2px calc(4px + env(safe-area-inset-bottom, 0px));
+  }
+  .tab {
+    flex: 1 1 0; min-width: 0; flex-direction: column; gap: 2px;
+    padding: 6px 0 5px; font-size: .62rem; line-height: 1.1; justify-content: center;
+  }
+  .tab .tab-ico { font-size: 1.15rem; line-height: 1; }
+  .tab:hover { background: transparent; color: var(--mu); }
+  .tab.active, .tab.active:hover { background: rgba(22,163,74,.15); color: #4ade80; }
+  .notif-badge { top: 3px; right: calc(50% - 17px); }
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+  .toast-wrap { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); right: 12px; left: 12px; }
+  .persona-chip { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* Inside the Android app the native bar above already shows the app name. */
+body.in-app .logo { display: none; }
+body.in-app .topbar { justify-content: flex-end; height: 48px; }
 </style>
 </head>
 <body>
@@ -361,16 +415,14 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
 <!-- ── Topbar ─────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="logo">⚡ WattWise</div>
-  <nav class="nav-tabs">
-    <button class="tab active" data-sec="home" id="tab-home">🏠 Home</button>
-    <button class="tab" data-sec="energy" id="tab-energy">📊 Energy</button>
-    <button class="tab" data-sec="devices" id="tab-devices">🔌 Devices</button>
-    <button class="tab" data-sec="notifications" id="tab-notifications">
-      🔔 Alerts <span class="notif-badge" id="notif-badge"></span>
-    </button>
-    <button class="tab" data-sec="goals" id="tab-goals">🎯 Goals</button>
-    <button class="tab" data-sec="ranking" id="tab-ranking">🏆 Rank</button>
-    <button class="tab" data-sec="settings" id="tab-settings">⚙ Settings</button>
+  <nav class="nav-tabs" aria-label="Sections">
+    <button class="tab active" data-sec="home" id="tab-home"><span class="tab-ico">🏠</span><span class="tab-lbl">Home</span></button>
+    <button class="tab" data-sec="energy" id="tab-energy"><span class="tab-ico">📊</span><span class="tab-lbl">Energy</span></button>
+    <button class="tab" data-sec="devices" id="tab-devices"><span class="tab-ico">🔌</span><span class="tab-lbl">Devices</span></button>
+    <button class="tab" data-sec="notifications" id="tab-notifications"><span class="tab-ico">🔔</span><span class="tab-lbl">Alerts</span><span class="notif-badge" id="notif-badge"></span></button>
+    <button class="tab" data-sec="goals" id="tab-goals"><span class="tab-ico">🎯</span><span class="tab-lbl">Goals</span></button>
+    <button class="tab" data-sec="ranking" id="tab-ranking"><span class="tab-ico">🏆</span><span class="tab-lbl">Rank</span></button>
+    <button class="tab" data-sec="settings" id="tab-settings"><span class="tab-ico">⚙</span><span class="tab-lbl">Settings</span></button>
   </nav>
   <div class="topbar-right">
     <span class="persona-chip" id="persona-chip"></span>
@@ -410,6 +462,16 @@ label { display: flex; flex-direction: column; gap: 5px; font-size: .75rem; colo
       <button class="btn btn-outline btn-sm" id="suse-refresh" title="Refresh advisor">↻</button>
     </div>
     <div id="suse-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:12px"></div>
+  </div>
+
+  <!-- Health suggestion of the day, drawn from the user's own appliances -->
+  <div class="card health-card" id="health-tip-card" style="display:none">
+    <div class="health-ico">💚</div>
+    <div style="flex:1;min-width:0">
+      <div class="card-title" style="margin:0 0 2px">Healthy home tip <span id="health-tip-device" class="health-dev"></span></div>
+      <div id="health-tip-text" class="health-text"></div>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="goSection('devices')">All tips →</button>
   </div>
 
   <!-- KPI Grid -->
@@ -798,12 +860,9 @@ async function apiFetch(path, opts = {}) {
 }
 
 // ── Navigation ────────────────────────────────────────────────
+if (window.WattWiseApp) document.body.classList.add('in-app');
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    goSection(tab.dataset.sec);
-  });
+  tab.addEventListener('click', () => goSection(tab.dataset.sec));
 });
 
 const loaders = {
@@ -816,14 +875,47 @@ const loaders = {
   settings: loadSettings,
 };
 
-function goSection(name) {
-  if (SECTION_EVENTS[name] && name !== _activeSection) track(SECTION_EVENTS[name], name);
+// Sections visited before the current one, newest last: what "back" returns to.
+const _sectionTrail = [];
+
+function goSection(name, opts = {}) {
+  if (!loaders[name]) name = 'home';
+  const previous = _activeSection;
+  const changed = name !== previous;
+  if (SECTION_EVENTS[name] && changed) track(SECTION_EVENTS[name], name);
+  if (changed && !opts.back) {
+    _sectionTrail.push(previous);
+    if (_sectionTrail.length > 25) _sectionTrail.shift();
+  }
   _activeSection = name;
   document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
   document.getElementById('s-' + name)?.classList.add('active');
-  document.querySelectorAll('.tab').forEach(t => { if (t.dataset.sec === name) t.classList.add('active'); });
+  // Exactly one tab is highlighted, however the section was opened (a tab, an
+  // in-page link such as "All devices →", a notification, or "back").
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.sec === name));
+  if (changed) window.scrollTo(0, 0);
   loaders[name]?.();
 }
+
+// "Back" for the Android app (its Back button calls this) — closes whatever is open
+// on top, then returns to the previous section, then to Home. Returns false only when
+// there is nothing left to go back to, so the app knows it may close.
+window.wwHandleBack = function () {
+  try {
+    if (!token || document.getElementById('auth-overlay').style.display === 'flex') return false;
+    const sheet = document.getElementById('report-sheet');
+    if (sheet && sheet.classList.contains('open')) { closeReportSheet(); return true; }
+    if (_activeSection === 'devices') {
+      const form = document.getElementById('add-device-form');
+      if (form && form.style.display !== 'none') { form.style.display = 'none'; return true; }
+      const open = [...document.querySelectorAll('.device-insights')].find(p => p.style.display !== 'none');
+      if (open) { toggleDeviceInsights(Number(open.id.replace('dev-insights-', '')), null); return true; }
+    }
+    if (_sectionTrail.length) { goSection(_sectionTrail.pop(), { back: true }); return true; }
+    if (_activeSection !== 'home') { goSection('home', { back: true }); return true; }
+  } catch (e) { console.warn('back:', e.message); }
+  return false;
+};
 
 // Honour a push deep-link like /notifications?category=notifications — open the
 // alerts tab on the right sub-category (set by WattWiseNotificationRouter).
@@ -951,6 +1043,15 @@ async function init() {
       // picker (re-running would reset the user's selected range); 'settings'
       // is a form, not a data view.
       if (_activeSection === 'energy' || _activeSection === 'settings') return;
+      // Never redraw under the user's hands: the refresh rebuilt the Devices list every
+      // 30 s, which snapped an open device panel shut, and it could redraw a list while
+      // a form was being filled in or the "what did you do?" sheet was open.
+      const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+      const sheetOpen = document.getElementById('report-sheet')?.classList.contains('open');
+      const deviceOpen = _activeSection === 'devices' && (
+        document.getElementById('add-device-form')?.style.display === 'block' ||
+        [...document.querySelectorAll('.device-insights')].some(p => p.style.display !== 'none'));
+      if (typing || sheetOpen || deviceOpen) return;
       loaders[_activeSection]?.();
     }, 30_000);
     populateGoalDeviceDropdown();
@@ -1067,12 +1168,51 @@ async function loadHome() {
   loadSmartUseNow();
 }
 
+// ── Health suggestions ────────────────────────────────────────
+// Each device's tips come with the smart advisor's answer (alerts first, then the
+// general tips for that appliance). Kept for the Devices tab and the home card.
+let _healthByDevice = {};
+let _healthLoadedAt = 0;
+
+function rememberHealthTips(data) {
+  _healthByDevice = {};
+  (data?.devices || []).forEach(d => {
+    _healthByDevice[d.device_id] = d.health_tips?.length ? d.health_tips : (d.health_tip ? [d.health_tip] : []);
+  });
+  _healthLoadedAt = Date.now();
+  const card = document.getElementById('health-tip-card');
+  const t = data?.health_tip_of_the_day;
+  if (!card) return;
+  if (!t?.tip) { card.style.display = 'none'; return; }
+  document.getElementById('health-tip-device').textContent = `${iconFor(t.appliance_key)} ${t.device_name}`;
+  document.getElementById('health-tip-text').textContent = t.tip;
+  card.style.display = 'flex';
+}
+
+async function ensureHealthTips() {
+  if (Date.now() - _healthLoadedAt < 5 * 60 * 1000) return;
+  try {
+    const data = await apiFetch('/smart-notifications/check-all');
+    if (data) rememberHealthTips(data);
+  } catch (e) { console.warn('Health tips:', e.message); }
+}
+
+function healthBlock(deviceId) {
+  const tips = _healthByDevice[deviceId] || [];
+  if (!tips.length) return '';
+  return `<div class="health-panel">
+    <div class="card-title" style="margin-bottom:2px">💚 Health &amp; wellbeing</div>
+    ${tips.slice(0, 4).map(t => `<div class="health-tip">${esc(t)}</div>`).join('')}
+  </div>`;
+}
+
 // ── SMART USE NOW (batch advisor ribbon) ──────────────────────
 async function loadSmartUseNow() {
   const ribbon = document.getElementById('smart-use-ribbon');
   if (!ribbon) return;
   try {
     const data = await apiFetch('/smart-notifications/check-all');
+    rememberHealthTips(data);
     ribbon.style.display = 'block';
     const counts = data.counts || { ok: 0, review: 0, delay: 0 };
     const peak = data.is_peak_time;
@@ -1102,7 +1242,7 @@ async function loadSmartUseNow() {
                   : 'var(--green)';
       const label = d.verdict === 'delay' ? '⏸ Delay'
                   : d.verdict === 'review' ? '💡 Review' : '✅ OK';
-      const topAlert = (d.alerts && d.alerts[0]) ? d.alerts[0].message : d.verdict_text;
+      const topAlert = (d.alerts && d.alerts[0]) ? (d.alerts[0].energy_message || d.alerts[0].message) : d.verdict_text;
       return `
         <div class="card" style="padding:10px 12px;border-left:3px solid ${colour};margin:0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -1110,6 +1250,7 @@ async function loadSmartUseNow() {
             <div style="font-size:.7rem;color:${colour};font-weight:600">${label}</div>
           </div>
           <div style="font-size:.72rem;color:var(--mu);line-height:1.4">${san(topAlert)}</div>
+          ${d.health_tip ? `<div class="health-tip">💚 ${esc(d.health_tip)}</div>` : ''}
           <div style="display:flex;justify-content:space-between;font-size:.68rem;color:var(--mu);margin-top:6px">
             <span>Score: ${(d.efficiency_score || 0).toFixed(0)}</span>
             <span>~£${(d.estimated_cost_this_use_gbp || 0).toFixed(3)}/use</span>
@@ -1325,7 +1466,7 @@ async function exportMyData() {
 async function loadDevices() {
   if (!homeId) return;
   try {
-    const devs = await apiFetch('/homes/' + homeId + '/devices');
+    const [devs] = await Promise.all([apiFetch('/homes/' + homeId + '/devices'), ensureHealthTips()]);
     const el = document.getElementById('device-list');
     if (!devs?.length) { el.innerHTML = '<div class="empty">No devices yet. Add one below.</div>'; return; }
     el.innerHTML = devs.map(d => `
@@ -1334,6 +1475,7 @@ async function loadDevices() {
         <div style="flex:1">
           <div class="device-name">${san(d.name)}</div>
           <div class="device-loc">${san(d.location || '')} · <code style="font-size:.68rem;color:var(--mu)">${san(d.entity_id)}</code></div>
+          ${(_healthByDevice[d.id] || [])[0] ? `<div class="device-health">💚 ${esc(_healthByDevice[d.id][0])}</div>` : ''}
         </div>
         <span class="pill pill-g">${san(d.appliance_key)}</span>
         <span style="margin-left:8px;color:var(--mu);font-size:.7rem" id="dev-expand-${d.id}">▾</span>
@@ -1365,7 +1507,7 @@ async function toggleDeviceInsights(deviceId, rowEl) {
     ]);
 
     if (!profile && !standby) {
-      panel.innerHTML = '<div class="empty" style="padding:8px">No data yet for this device</div>';
+      panel.innerHTML = '<div class="empty" style="padding:8px">No data yet for this device</div>' + healthBlock(deviceId);
       return;
     }
 
@@ -1377,7 +1519,7 @@ async function toggleDeviceInsights(deviceId, rowEl) {
           <div id="live-watts-${deviceId}" style="font-size:1.5rem;font-weight:700;color:var(--mu)">— W</div>
           <div id="live-watts-sub-${deviceId}" style="font-size:.68rem;color:var(--mu);margin-top:2px">awaiting data…</div>
         </div>
-        <div style="flex:1;height:42px"><canvas id="live-watts-spark-${deviceId}"></canvas></div>
+        <div style="flex:1;min-width:0;height:42px;position:relative"><canvas id="live-watts-spark-${deviceId}"></canvas></div>
       </div>
       <div class="grid2" style="gap:14px">
         <div>
@@ -1399,6 +1541,7 @@ async function toggleDeviceInsights(deviceId, rowEl) {
           ${standby ? renderStandbyCard(standby) : '<div class="empty" style="padding:8px">No standby data</div>'}
         </div>
       </div>
+      ${healthBlock(deviceId)}
     `;
 
     // Kick off live wattage polling (3-second interval)
@@ -1553,7 +1696,7 @@ function startLiveWatts(deviceId) {
   if (_liveWattTimers[deviceId]) return;
   const tick = async () => {
     try {
-      const data = await apiFetch(`/readings/${deviceId}/live?points=20`);
+      const data = await apiFetch(`/readings/${deviceId}/live?points=20`) || {};
       const gauge = document.getElementById(`live-watts-${deviceId}`);
       const sub = document.getElementById(`live-watts-sub-${deviceId}`);
       const sparkCanvas = document.getElementById(`live-watts-spark-${deviceId}`);
@@ -1561,7 +1704,10 @@ function startLiveWatts(deviceId) {
       const w = data.current_watts || 0;
       gauge.textContent = w.toFixed(1) + ' W';
       gauge.style.color = w > 1500 ? 'var(--red)' : w > 500 ? 'var(--amber)' : w > 50 ? 'var(--green)' : 'var(--mu)';
-      if (sub) sub.textContent = `peak ${data.peak_watts_window.toFixed(0)} W · avg ${data.avg_watts_window.toFixed(0)} W · last seen ${new Date(data.last_seen).toLocaleTimeString('en-GB')}`;
+      // A device that has not reported yet has no window statistics: say so plainly.
+      if (sub) sub.textContent = data.last_seen
+        ? `peak ${Number(data.peak_watts_window || 0).toFixed(0)} W · avg ${Number(data.avg_watts_window || 0).toFixed(0)} W · last seen ${new Date(data.last_seen).toLocaleTimeString('en-GB')}`
+        : 'no readings from this device yet';
 
       if (sparkCanvas && data.points?.length) {
         const chartId = `live-watts-spark-${deviceId}`;
@@ -1742,7 +1888,8 @@ function notifHTML(n, showActions = false) {
   }
   return `<div class="notif-item ${esc(n.severity)}${n.is_read && !waiting ? ' seen' : ''}" data-notif-id="${n.id}" data-act="open" data-id="${n.id}">
     <div class="notif-title">${esc(n.title)}</div>
-    <div class="notif-msg">${esc(n.message)}</div>
+    <div class="notif-msg">${esc(n.health_tip && n.energy_message ? n.energy_message : n.message)}</div>
+    ${n.health_tip && n.energy_message ? `<div class="health-tip">💚 <b>Health tip:</b> ${esc(n.health_tip)}</div>` : ''}
     ${n.action_hint ? `<div class="notif-hint">💡 ${esc(n.action_hint)}</div>` : ''}
     <div class="notif-time">${time}${tags.length ? ' · ' + tags.join(' ') : ''}</div>
     ${actions}

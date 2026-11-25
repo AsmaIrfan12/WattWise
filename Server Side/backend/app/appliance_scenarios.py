@@ -19,6 +19,7 @@ Used by:
 import logging
 from typing import Optional
 from app.config import settings
+from app.health_tips import health_tips_for, scenario_health_tip, scenario_tip_lead, with_health_tip
 
 logger = logging.getLogger("appliance_scenarios")
 
@@ -56,6 +57,10 @@ APPLIANCE_BASE_ENERGY: dict[str, float] = {
 
 # ── Scenario Definitions ────────────────────────────────────────
 # Each scenario: { level, priority, scenario (str), condition (callable), message (callable) }
+# The message here is the ENERGY advice. The health tip that completes each notification
+# lives in app/health_tips.py (keyed by appliance + scenario name). generate_alerts()
+# joins the two, so every alert reads "<energy advice> 💚 Health tip: <tip>" exactly as
+# in the original app, and also returns the two parts separately.
 # condition(data) -> bool
 # message(data)   -> str
 # data keys: eaec, dailyEAEC, N, fT, fH, fP, temperature, humidity, pressure,
@@ -72,8 +77,7 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "condition": lambda d: d["N"] > 0 and d["eaec"] > 4.5,
             "message": lambda d: (
                 f"⚠️ Your dryer used {d['eaec']:.2f} kWh this cycle — that's higher than normal. "
-                f"Try using a shorter or eco cycle to save energy. "
-                f"💚 Health tip: Line-drying clothes in fresh air naturally sanitizes them!"
+                f"Try using a shorter or eco cycle to save energy."
             ),
         },
         {
@@ -81,8 +85,8 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "scenario": "Daily consumption high",
             "condition": lambda d: d["N"] > 0 and d["dailyEAEC"] > 7,
             "message": lambda d: (
-                f"💡 You've used the dryer {d['dailyEAEC']:.1f} kWh today. "
-                f"Consider air drying some items to save money. 🌿 Fresh air drying reduces static!"
+                f"💡 You've used the dryer {d['dailyEAEC']:.1f} kWh today. That's quite a bit! "
+                f"Consider air drying some items to save money."
             ),
         },
         {
@@ -91,7 +95,7 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "condition": lambda d: d["N"] > 0 and d["fH"] > 1.15,
             "message": lambda d: (
                 f"💧 High humidity is making your dryer work {round((d['fH'] - 1) * 100)}% harder. "
-                f"Wait for a drier day or use a dehumidifier. 🏠 Lower humidity reduces mold growth!"
+                f"Wait for a drier day or use a dehumidifier to save energy."
             ),
         },
         {
@@ -100,7 +104,7 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "condition": lambda d: d["N"] > 2,
             "message": lambda d: (
                 f"⚡ You've run the dryer {d['N']} times today. "
-                f"Try combining your laundry loads to save energy. 🧺 Fewer sessions = less dust circulation."
+                f"Try combining your laundry loads to save energy and money."
             ),
         },
     ],
@@ -138,8 +142,8 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "scenario": "Late night usage",
             "condition": lambda d: d.get("lateNightHours", 0) > 0,
             "message": lambda d: (
-                "🌙 Late-night kettle use detected. Caffeine this late can affect sleep quality. "
-                "Try herbal tea or warm water instead!"
+                "🌙 Late-night kettle use detected. Boil only the cup you need: "
+                "a full kettle uses several times the energy of a single mug."
             ),
         },
     ],
@@ -366,7 +370,7 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "condition": lambda d: d.get("duration", 0) > 240 and d["N"] > 0,
             "message": lambda d: (
                 f"🎮 Your console ran for {d['duration']:.0f} minutes today. "
-                f"Extended gaming sessions also affect posture and eye health. Take regular breaks!"
+                f"Switch it off fully between sessions instead of leaving it idle."
             ),
         },
         {
@@ -392,8 +396,8 @@ APPLIANCE_SCENARIOS: dict[str, list[dict]] = {
             "scenario": "Late night gaming",
             "condition": lambda d: d.get("lateNightHours", 0) > 1,
             "message": lambda d: (
-                "🌙 Late-night gaming detected. Blue light exposure can disrupt sleep. "
-                "Try setting a console shut-off timer."
+                "🌙 Late-night gaming detected. "
+                "Set a console shut-off timer so it does not keep running overnight."
             ),
         },
     ],
@@ -497,11 +501,17 @@ def generate_alerts(appliance_key: str, data: dict) -> list[dict]:
         try:
             if scenario["condition"](data):
                 msg = scenario["message"]
+                energy_message = msg(data) if callable(msg) else msg
+                tip = scenario_health_tip(appliance_key, scenario["scenario"])
                 alerts.append({
                     "level": scenario["level"],
                     "priority": scenario["priority"],
                     "scenario": scenario["scenario"],
-                    "message": msg(data) if callable(msg) else msg,
+                    # The notification as the user reads it: energy advice, then the health tip.
+                    "message": with_health_tip(
+                        energy_message, tip, scenario_tip_lead(appliance_key, scenario["scenario"])),
+                    "energy_message": energy_message,
+                    "health_tip": tip,
                 })
         except Exception as e:
             logger.warning(f"Scenario eval error [{appliance_key}/{scenario['scenario']}]: {e}")
@@ -595,6 +605,9 @@ def calculate_optimization(
     alerts = generate_alerts(appliance_key, data)
     potential_savings = calculate_potential_savings(alerts, efficiency_loss)
     recommendations = generate_recommendations(appliance_key, temperature, humidity, alerts)
+    # Health suggestions for this device: those of the triggered alerts first, then the
+    # general ones for the appliance. Never empty.
+    health_tips = health_tips_for(appliance_key, alerts)
 
     return {
         "appliance_key": appliance_key,
@@ -614,6 +627,8 @@ def calculate_optimization(
         "efficiency_score": round(max(0, 100 - abs(efficiency_loss)), 1),
         "alerts": alerts,
         "recommendations": recommendations,
+        "health_tip": health_tips[0],
+        "health_tips": health_tips,
         "potential_savings_pct": round(potential_savings, 1),
         "usage_data": {
             "N": data["N"],
