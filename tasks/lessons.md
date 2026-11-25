@@ -112,3 +112,17 @@ usage based on those interactions.
   harness before blaming the app, and say in the report which of the two it was.
 - Replacing a container still causes about 20 s of 502 on its public route while the proxy
   re-resolves it. After every deploy, poll the public URL until it returns 200.
+
+## 2026-11-25 — An app problem report: first find out which build is on the device
+- Suhas reported "Webpage not available … http://159.65.213.183/" after entering the current
+  address. The code was right; the emulator Android Studio opened still had version 4.0.0
+  from June installed, whose saved address was the destroyed droplet and which ignores a
+  changed address until restart.
+- **Rule:** before reasoning about app behaviour from a screenshot, check the installed
+  build: `adb shell dumpsys package com.wattwise.userapp.debug | grep versionName` (release:
+  `com.wattwise.userapp`). Visual tell-tales: 4.2.0 shows "WattWise" in the green bar and a
+  bottom tab bar; a raw "Webpage not available" page means a build older than 4.1.0.
+- An address in an error page that appears nowhere in the code is saved state on the device,
+  not configuration: read it with `run-as … cat files/datastore/*.preferences_pb | strings`.
+- When telling the user which address to use, also tell them which app version it applies
+  to and how to recognise that version.
