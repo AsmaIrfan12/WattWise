@@ -126,3 +126,23 @@ usage based on those interactions.
   not configuration: read it with `run-as … cat files/datastore/*.preferences_pb | strings`.
 - When telling the user which address to use, also tell them which app version it applies
   to and how to recognise that version.
+
+## 2026-11-25 — "The button does nothing": find out whether a request was ever sent
+- Suhas reported that Add Device did not work on desktop or in the app. The server logs
+  showed no add-device request at all, which placed the fault in the page before any code
+  ran on the server: the form was inserted BELOW the device list (off-screen with a full
+  list) and could not be saved without a technical "Entity ID".
+- **Rule:** for "button X does nothing", first check the proxy logs for the request. No
+  request means the problem is in what the user sees; a request with an error means the
+  server. Do not start by reading the handler.
+- **Rule:** anything a user must fill in opens IN FRONT of them (a dialog or sheet), with
+  focus, inline errors, a busy state, and a visible result (the new item scrolled into view).
+  Never reveal a form by toggling `display` on an element elsewhere on the page.
+- **Rule:** a participant is never asked for an internal identifier. Generate it on the
+  server and make it unique where the database demands uniqueness; answer a clash with 409
+  and a sentence, never with the database's 500.
+- My own earlier tests called `showAddDevice()` directly and measured layout, so they passed
+  while the feature was unusable. A UI test must do what the user does (click, type, save)
+  and assert the outcome the user wants (the device exists and is visible).
+- Looking at the emulator screenshot for one thing showed another (a false "No internet
+  connection" banner). Read the whole screenshot, not only the part under test.
