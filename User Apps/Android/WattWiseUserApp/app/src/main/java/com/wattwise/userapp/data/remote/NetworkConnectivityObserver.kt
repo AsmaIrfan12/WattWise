@@ -26,21 +26,22 @@ class NetworkConnectivityObserver @Inject constructor(
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     val observe: Flow<ConnectivityStatus> = callbackFlow {
+        // Counts the networks that are up: the phone is offline only when none is left.
+        // (Each callback is about ONE network. Reporting "lost" for one of two networks,
+        // or while moving from Wi-Fi to mobile data, showed "No internet connection"
+        // over a working dashboard.)
+        val tracker = ConnectivityTracker()
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                trySend(ConnectivityStatus.Available)
+                trySend(tracker.onAvailable(network.networkHandle))
             }
 
             override fun onLosing(network: Network, maxMsToLive: Int) {
-                trySend(ConnectivityStatus.Losing)
+                trySend(tracker.onLosing(network.networkHandle))
             }
 
             override fun onLost(network: Network) {
-                trySend(ConnectivityStatus.Lost)
-            }
-
-            override fun onUnavailable() {
-                trySend(ConnectivityStatus.Unavailable)
+                trySend(tracker.onLost(network.networkHandle))
             }
         }
 

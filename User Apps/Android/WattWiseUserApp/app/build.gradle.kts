@@ -27,8 +27,8 @@ android {
         applicationId = "com.wattwise.userapp"  // WattWise rebrand — new Play Store listing
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "4.2.0"
+        versionCode = 7
+        versionName = "4.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

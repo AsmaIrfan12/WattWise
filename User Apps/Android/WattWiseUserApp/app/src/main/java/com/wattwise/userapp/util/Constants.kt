@@ -69,7 +69,7 @@ object Constants {
     const val SUPERVISOR_2           = "Dr. Charith Perera"
 
     // ── App Metadata ─────────────────────────────────────────────
-    const val APP_VERSION        = "4.2.0"
+    const val APP_VERSION        = "4.2.1"
     const val APP_VERSION_NAME   = "Community Release"
     const val APP_TAGLINE        = "Track. Save. Compete."
     const val APP_YEAR           = "2024–2026"
