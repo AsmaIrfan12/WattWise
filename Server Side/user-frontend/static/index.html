@@ -212,6 +212,23 @@ section.active { display: block; }
 .sheet-backdrop { display: none; position: fixed; inset: 0; z-index: 400; background: rgba(2,6,23,.7); align-items: flex-end; justify-content: center; }
 .sheet-backdrop.open { display: flex; }
 .sheet { width: 100%; max-width: 520px; background: var(--surf); border: 1px solid var(--bd); border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+/* Wider screens: a centred dialog instead of a sheet rising from the bottom. */
+@media (min-width: 641px) {
+  .sheet-backdrop { align-items: center; }
+  .sheet { border-radius: 16px; }
+}
+.sheet select.inp { appearance: auto; }
+.sheet label.sheet-label { display: block; }
+.sheet label.sheet-label span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.sheet .inp.invalid { border-color: var(--red); }
+.field-error { color: #fca5a5; font-size: .74rem; margin-top: 4px; min-height: 0; }
+.field-error:empty { display: none; }
+.sheet-adv { margin-top: 14px; font-size: .78rem; color: var(--t2); }
+.sheet-adv summary { cursor: pointer; color: var(--mu); padding: 4px 0; }
+.sheet-adv .inp { margin-top: 6px; }
+.sheet-note { font-size: .74rem; color: var(--mu); margin-top: 12px; line-height: 1.4; }
+.device-row.just-added { animation: rowFlash 2.4s ease; }
+@keyframes rowFlash { 0%, 55% { background: rgba(34,197,94,.22); } 100% { background: transparent; } }
 .sheet-h { font-size: 1rem; font-weight: 700; }
 .sheet-sub { font-size: .78rem; color: var(--mu); margin-top: 2px; }
 .sheet-label { font-size: .76rem; color: var(--t2); margin: 12px 0 4px; }
@@ -603,32 +620,9 @@ body.in-app .topbar { justify-content: flex-end; height: 48px; }
   <div class="card">
     <div class="card-hdr">
       <span class="card-title">My Devices</span>
-      <button class="btn btn-g btn-sm" onclick="showAddDevice()">+ Add Device</button>
+      <button class="btn btn-g btn-sm" id="btn-add-device" type="button">+ Add Device</button>
     </div>
     <div id="device-list"><div class="empty">Loading…</div></div>
-  </div>
-  <div class="card" id="add-device-form" style="display:none">
-    <div class="card-title" style="margin-bottom:14px">Register New Device</div>
-    <div class="form-row">
-      <label>Device name<input id="dev-name" placeholder="e.g. Kitchen Kettle"></label>
-      <label>Entity ID<input id="dev-entity" placeholder="e.g. switch.kettle"></label>
-    </div>
-    <div class="form-row">
-      <label>Type
-        <select id="dev-type">
-          <option value="kettle">Kettle</option><option value="washing_machine">Washing Machine</option>
-          <option value="dishwasher">Dishwasher</option><option value="dryer">Dryer</option>
-          <option value="microwave">Microwave</option><option value="toaster">Toaster</option>
-          <option value="airfryer">Air Fryer</option><option value="gaming_console">Gaming Console</option>
-          <option value="tv">TV</option><option value="other">Other</option>
-        </select>
-      </label>
-      <label>Location<input id="dev-location" placeholder="e.g. Kitchen"></label>
-    </div>
-    <div style="display:flex;gap:10px;margin-top:4px">
-      <button class="btn btn-g" onclick="addDevice()">Save Device</button>
-      <button class="btn btn-outline" onclick="document.getElementById('add-device-form').style.display='none'">Cancel</button>
-    </div>
   </div>
 </section>
 
@@ -647,6 +641,46 @@ body.in-app .topbar { justify-content: flex-end; height: 48px; }
       <button class="btn btn-outline" id="rs-cancel">Cancel</button>
     </div>
   </div>
+</div>
+
+<!-- Add a device: a dialog, so it is always in front of the user. (It used to be a form
+     inserted below the device list: with a full list it opened off-screen and the
+     button looked dead; and it could not be saved without a technical "Entity ID".) -->
+<div id="device-sheet" class="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="ds-heading">
+  <form class="sheet" id="ds-form" novalidate autocomplete="off">
+    <div id="ds-heading" class="sheet-h">Add a device</div>
+    <div class="sheet-sub">Tell WattWise which appliance a smart plug is measuring.</div>
+
+    <label class="sheet-label" for="ds-type">Appliance</label>
+    <select id="ds-type" class="inp"></select>
+
+    <label class="sheet-label" for="ds-name">Name</label>
+    <input id="ds-name" class="inp" maxlength="60" placeholder="e.g. Kitchen kettle">
+    <div class="field-error" id="ds-name-error" role="alert"></div>
+
+    <label class="sheet-label" for="ds-location">Room <span style="color:var(--mu)">(optional)</span></label>
+    <input id="ds-location" class="inp" maxlength="60" list="ds-rooms" placeholder="e.g. Kitchen">
+    <datalist id="ds-rooms">
+      <option value="Kitchen"></option><option value="Utility room"></option><option value="Living room"></option>
+      <option value="Dining room"></option><option value="Bedroom"></option><option value="Home office"></option>
+      <option value="Garage"></option>
+    </datalist>
+
+    <details class="sheet-adv" id="ds-adv">
+      <summary>Advanced: smart plug sensor ID</summary>
+      <input id="ds-entity" class="inp" maxlength="128" placeholder="Leave empty to set it automatically"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="sheet-sub">Only needed if whoever installed your WattWise hub gave you a sensor name for this plug.</div>
+      <div class="field-error" id="ds-entity-error" role="alert"></div>
+    </details>
+
+    <div class="sheet-note">Readings appear once the plug is linked to your WattWise hub and starts reporting.</div>
+    <div class="field-error" id="ds-error" role="alert"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button type="submit" class="btn btn-g" id="ds-save" style="flex:1">Add device</button>
+      <button type="button" class="btn btn-outline" id="ds-cancel">Cancel</button>
+    </div>
+  </form>
 </div>
 
 <!-- ── NOTIFICATIONS ──────────────────────────────────────── -->
@@ -853,7 +887,11 @@ async function apiFetch(path, opts = {}) {
   if (r.status === 401) { logout(); return null; }
   if (!r.ok) {
     const err = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(err.detail || `HTTP ${r.status}`);
+    const d = err.detail;
+    const msg = typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg || '').filter(Boolean).join('; ') : '';
+    const failure = new Error(msg || `HTTP ${r.status}`);
+    failure.status = r.status;
+    throw failure;
   }
   if (r.status === 204) return {};
   return r.json();
@@ -916,9 +954,8 @@ window.wwHandleBack = function () {
     if (!token || document.getElementById('auth-overlay').style.display === 'flex') return false;
     const sheet = document.getElementById('report-sheet');
     if (sheet && sheet.classList.contains('open')) { closeReportSheet(); return true; }
+    if (document.getElementById('device-sheet')?.classList.contains('open')) { closeDeviceSheet(); return true; }
     if (_activeSection === 'devices') {
-      const form = document.getElementById('add-device-form');
-      if (form && form.style.display !== 'none') { form.style.display = 'none'; return true; }
       const open = [...document.querySelectorAll('.device-insights')].find(p => p.style.display !== 'none');
       if (open) { toggleDeviceInsights(Number(open.id.replace('dev-insights-', '')), null); return true; }
     }
@@ -947,7 +984,7 @@ function applyDeepLink() {
 
 // ── Icons ─────────────────────────────────────────────────────
 function iconFor(key) {
-  const m = { kettle: '☕', washing_machine: '👕', dryer: '🔄', dishwasher: '🍽️', microwave: '📡', gaming_console: '🎮', tv: '📺', toaster: '🍞', airfryer: '🍟', cooker: '🍳', other: '🔌', xbox: '🎮' };
+  const m = { kettle: '☕', washing_machine: '👕', dryer: '🔄', dishwasher: '🍽️', microwave: '📡', gaming_console: '🎮', tv: '📺', toaster: '🍞', airfryer: '🍟', cooker: '🍳', other: '🔌', xbox: '🎮', coffeemachine: '☕', coffee_machine: '☕', water_purifier: '🚰' };
   return m[key] || '🔌';
 }
 
@@ -1059,10 +1096,9 @@ async function init() {
       // 30 s, which snapped an open device panel shut, and it could redraw a list while
       // a form was being filled in or the "what did you do?" sheet was open.
       const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
-      const sheetOpen = document.getElementById('report-sheet')?.classList.contains('open');
-      const deviceOpen = _activeSection === 'devices' && (
-        document.getElementById('add-device-form')?.style.display === 'block' ||
-        [...document.querySelectorAll('.device-insights')].some(p => p.style.display !== 'none'));
+      const sheetOpen = !!document.querySelector('.sheet-backdrop.open');
+      const deviceOpen = _activeSection === 'devices' &&
+        [...document.querySelectorAll('.device-insights')].some(p => p.style.display !== 'none');
       if (typing || sheetOpen || deviceOpen) return;
       loaders[_activeSection]?.();
     }, 30_000);
@@ -1482,7 +1518,7 @@ async function loadDevices() {
     const el = document.getElementById('device-list');
     if (!devs?.length) { el.innerHTML = '<div class="empty">No devices yet. Add one below.</div>'; return; }
     el.innerHTML = devs.map(d => `
-      <div class="device-row" style="cursor:pointer" onclick="toggleDeviceInsights(${d.id}, this)">
+      <div class="device-row" data-device-id="${d.id}" style="cursor:pointer" onclick="toggleDeviceInsights(${d.id}, this)">
         <div class="device-icon" style="background:rgba(22,163,74,.15);color:var(--green)">${iconFor(d.appliance_key)}</div>
         <div style="flex:1">
           <div class="device-name">${san(d.name)}</div>
@@ -1759,25 +1795,118 @@ function stopLiveWatts(deviceId) {
   destroyChart(`live-watts-spark-${deviceId}`);
 }
 
-function showAddDevice() { document.getElementById('add-device-form').style.display = 'block'; }
+// ── Add a device ──────────────────────────────────────────────
+// [appliance_key, label]. The keys are the ones the alert and health-tip rules know.
+const DEVICE_TYPES = [
+  ['kettle', 'Kettle'], ['washing_machine', 'Washing machine'], ['dishwasher', 'Dishwasher'],
+  ['dryer', 'Tumble dryer'], ['microwave', 'Microwave'], ['toaster', 'Toaster'], ['airfryer', 'Air fryer'],
+  ['cooker', 'Cooker'], ['coffeemachine', 'Coffee machine'], ['gaming_console', 'Games console'],
+  ['tv', 'TV'], ['water_purifier', 'Water purifier'], ['other', 'Other appliance'],
+];
+let _dsAutoName = '';      // the name the dialog suggested, so a typed name is never overwritten
+let _dsSaving = false;
 
-async function addDevice() {
-  const name = document.getElementById('dev-name').value.trim();
-  const entityId = document.getElementById('dev-entity').value.trim();
-  const appKey = document.getElementById('dev-type').value;
-  const loc = document.getElementById('dev-location').value.trim();
-  if (!name || !entityId) { toast('Name and Entity ID required', 'error'); return; }
-  try {
-    await apiFetch('/homes/' + homeId + '/devices', {
-      method: 'POST',
-      body: JSON.stringify({ name, entity_id: entityId, appliance_key: appKey, location: loc }),
-    });
-    toast('Device registered! ✅');
-    document.getElementById('add-device-form').style.display = 'none';
-    loadDevices();
-    populateGoalDeviceDropdown();
-  } catch (e) { toast('Error: ' + e.message, 'error'); }
+function suggestedDeviceName(typeKey) {
+  const label = (DEVICE_TYPES.find(t => t[0] === typeKey) || ['', 'Device'])[1];
+  const used = new Set([...document.querySelectorAll('#device-list .device-name')].map(e => e.textContent.trim().toLowerCase()));
+  if (!used.has(label.toLowerCase())) return label;
+  let n = 2;
+  while (used.has(`${label} ${n}`.toLowerCase())) n++;
+  return `${label} ${n}`;
 }
+
+function setFieldError(inputId, message) {
+  const input = document.getElementById(inputId);
+  if (input) input.classList.toggle('invalid', !!message);
+  const box = document.getElementById(inputId + '-error');
+  if (box) box.textContent = message || '';
+}
+
+function openDeviceSheet() {
+  if (!homeId) { toast('Your account has no home set up yet. Ask the research team to add one.', 'error'); return; }
+  const type = document.getElementById('ds-type');
+  if (!type.options.length) {
+    type.innerHTML = DEVICE_TYPES.map(([key, label]) => `<option value="${key}">${iconFor(key)} ${label}</option>`).join('');
+  }
+  type.value = DEVICE_TYPES[0][0];
+  _dsAutoName = suggestedDeviceName(type.value);
+  document.getElementById('ds-name').value = _dsAutoName;
+  document.getElementById('ds-location').value = '';
+  document.getElementById('ds-entity').value = '';
+  document.getElementById('ds-adv').open = false;
+  document.getElementById('ds-error').textContent = '';
+  setFieldError('ds-name', ''); setFieldError('ds-entity', '');
+  const save = document.getElementById('ds-save');
+  save.disabled = false; save.textContent = 'Add device';
+  document.getElementById('device-sheet').classList.add('open');
+  type.focus();
+}
+
+function closeDeviceSheet() {
+  document.getElementById('device-sheet').classList.remove('open');
+}
+
+async function saveDevice(e) {
+  e?.preventDefault();
+  if (_dsSaving) return;
+  const name = document.getElementById('ds-name').value.trim();
+  const entityId = document.getElementById('ds-entity').value.trim();
+  const errorBox = document.getElementById('ds-error');
+  errorBox.textContent = '';
+  setFieldError('ds-name', name ? '' : 'Give the device a name, for example "Kitchen kettle".');
+  const entityOk = !entityId || /^[A-Za-z0-9_.:\-]{1,128}$/.test(entityId);
+  setFieldError('ds-entity', entityOk ? '' : 'Use only letters, numbers, dots, underscores, colons and hyphens.');
+  if (!entityOk) document.getElementById('ds-adv').open = true;
+  if (!name) { document.getElementById('ds-name').focus(); return; }
+  if (!entityOk) { document.getElementById('ds-entity').focus(); return; }
+
+  const body = { name, appliance_key: document.getElementById('ds-type').value };
+  const room = document.getElementById('ds-location').value.trim();
+  if (room) body.location = room;
+  if (entityId) body.entity_id = entityId;
+
+  const save = document.getElementById('ds-save');
+  _dsSaving = true; save.disabled = true; save.textContent = 'Adding…';
+  try {
+    const created = await apiFetch('/homes/' + homeId + '/devices', { method: 'POST', body: JSON.stringify(body) });
+    if (!created) return;                         // session ended: the sign-in screen is already showing
+    closeDeviceSheet();
+    toast(`${created.name} added`);
+    track('CHANGE_SETTINGS', 'devices', { metadata: { action: 'add_device', appliance_key: created.appliance_key } });
+    _healthLoadedAt = 0;                          // the new device has health tips too
+    await loadDevices();
+    populateGoalDeviceDropdown();
+    const row = document.querySelector(`#device-list .device-row[data-device-id="${created.id}"]`);
+    if (row) { row.classList.add('just-added'); row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+  } catch (err) {
+    // Shown in the dialog, next to what the user typed, so it can be corrected and retried.
+    if (err.status === 409) { document.getElementById('ds-adv').open = true; setFieldError('ds-entity', err.message); }
+    else errorBox.textContent = `Could not add the device: ${err.message}`;
+  } finally {
+    _dsSaving = false; save.disabled = false; save.textContent = 'Add device';
+  }
+}
+
+document.getElementById('btn-add-device').addEventListener('click', openDeviceSheet);
+document.getElementById('ds-form').addEventListener('submit', saveDevice);
+document.getElementById('ds-cancel').addEventListener('click', closeDeviceSheet);
+document.getElementById('device-sheet').addEventListener('click', e => { if (e.target.id === 'device-sheet') closeDeviceSheet(); });
+document.getElementById('ds-type').addEventListener('change', e => {
+  // Keep the suggested name in step with the type until the user types their own.
+  const nameInput = document.getElementById('ds-name');
+  if (!nameInput.value.trim() || nameInput.value === _dsAutoName) {
+    _dsAutoName = suggestedDeviceName(e.target.value);
+    nameInput.value = _dsAutoName;
+    setFieldError('ds-name', '');
+  }
+});
+document.getElementById('ds-name').addEventListener('input', () => setFieldError('ds-name', ''));
+document.getElementById('ds-entity').addEventListener('input', () => setFieldError('ds-entity', ''));
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('device-sheet').classList.contains('open')) closeDeviceSheet();
+  else if (document.getElementById('report-sheet').classList.contains('open')) closeReportSheet();
+});
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────
 // Each alert comes back from the server WITH the user's decision (if any), so the
@@ -2260,8 +2389,7 @@ init();
 
 // Expose for inline handlers
 window.goSection = goSection;
-window.showAddDevice = showAddDevice;
-window.addDevice = addDevice;
+window.openDeviceSheet = openDeviceSheet;
 window.createGoal = createGoal;
 window.recordDecision = recordDecision;
 window.loadCustomRange = loadCustomRange;

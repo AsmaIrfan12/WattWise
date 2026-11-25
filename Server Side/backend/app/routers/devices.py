@@ -1,7 +1,10 @@
 """WattWise — Devices & Homes Router."""
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -99,46 +102,111 @@ _APPLIANCE_ENTITY_BASE = {
 }
 
 
-def _derive_entity_ids(name: str, appliance_key: str | None) -> dict:
-    """
-    Derive (entity_id, power_entity_id, switch_entity_id) from a device name
-    or appliance_key. Mirrors the old Node generateEntityIds() helper so that
-    existing MQTT topic conventions keep working.
-    """
-    import re
-    # Prefer the canonical appliance_key mapping when available
+MAX_DEVICE_NAME = 60
+_SENSOR_ID_OK = re.compile(r"^[A-Za-z0-9_.:\-]{1,128}$")
+
+
+def _entity_base(name: str | None, appliance_key: str | None) -> str:
+    """The stem of a device's sensor ID: the appliance's canonical name, else the device name."""
     base = _APPLIANCE_ENTITY_BASE.get((appliance_key or "").lower())
     if not base:
-        # Fallback: slugify the device name
-        slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
-        base = slug or "device"
+        base = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_") or "device"
+    return base
+
+
+def unique_entity_ids(name: str | None, appliance_key: str | None, taken: set[str]) -> dict:
+    """
+    Sensor IDs for a new device that do not clash with any the home already has.
+
+    A home may have two kettles. The first is "kettle_current_consumption" (the
+    convention the Raspberry Pi publisher uses); the next becomes
+    "kettle_2_current_consumption", and so on. `taken` is every entity_id already
+    used in the home, including removed devices (the database keeps their rows).
+    """
+    base = _entity_base(name, appliance_key)
+    candidate, n = base, 1
+    while f"{candidate}_current_consumption" in taken:
+        n += 1
+        candidate = f"{base}_{n}"
     return {
-        "entity_id": f"{base}_current_consumption",
-        "power_entity_id": f"{base}_current_consumption",
-        "switch_entity_id": f"{base}_switch_state",
+        "entity_id": f"{candidate}_current_consumption",
+        "power_entity_id": f"{candidate}_current_consumption",
+        "switch_entity_id": f"{candidate}_switch_state",
     }
+
+
+def _derive_entity_ids(name: str, appliance_key: str | None) -> dict:
+    """Sensor IDs for the first device of its kind (kept for callers that have no home context)."""
+    return unique_entity_ids(name, appliance_key, set())
 
 
 @router.post("/homes/{home_id}/devices", response_model=DeviceResponse, status_code=201)
 async def add_device(home_id: int, body: DeviceCreate, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Add a device to the caller's home.
+
+    Only a name and an appliance type are needed: the sensor ID is generated, unique
+    within the home. A sensor ID may be given (an installer linking a specific smart
+    plug); a clash with a device the home already has is answered with 409 and a
+    plain message. Before this, a second device of the same type, or a sensor ID
+    already in use, hit the database's unique key and came back as a bare 500.
+    """
     user_id = _get_user_id(request)
     # Verify home belongs to user
     home_result = await db.execute(select(Home).where(Home.id == home_id, Home.user_id == user_id))
     if not home_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Home not found")
 
-    payload = body.model_dump()
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Give the device a name.")
+    if len(name) > MAX_DEVICE_NAME:
+        raise HTTPException(status_code=422, detail=f"The name can be at most {MAX_DEVICE_NAME} characters.")
+    appliance_key = (body.appliance_key or "").strip().lower() or "other"
+    location = (body.location or "").strip() or None
 
-    # Auto-derive entity IDs if the caller didn't supply them
-    if not payload.get("entity_id") or not payload.get("power_entity_id"):
-        derived = _derive_entity_ids(payload.get("name"), payload.get("appliance_key"))
-        for k, v in derived.items():
-            if not payload.get(k):
-                payload[k] = v
+    existing = (await db.execute(select(Device).where(Device.home_id == home_id))).scalars().all()
+    by_entity = {d.entity_id: d for d in existing if d.entity_id}
+
+    payload = body.model_dump()
+    payload.update(name=name, appliance_key=appliance_key, location=location)
+
+    wanted = (body.entity_id or "").strip()
+    if wanted:
+        if not _SENSOR_ID_OK.match(wanted):
+            raise HTTPException(
+                status_code=422,
+                detail="A sensor ID can only contain letters, numbers, dots, underscores, colons and hyphens.",
+            )
+        clash = by_entity.get(wanted)
+        if clash is not None and clash.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This home already has a device with that sensor ID ({clash.name}).",
+            )
+        if clash is not None:
+            # A device that was removed earlier: bring it back (its history comes with it)
+            # instead of failing on the unique key.
+            clash.is_active = True
+            clash.name, clash.appliance_key, clash.location = name, appliance_key, location
+            await db.commit()
+            await db.refresh(clash)
+            return clash
+        derived = unique_entity_ids(name, appliance_key, set(by_entity))
+        payload["entity_id"] = wanted
+        payload["power_entity_id"] = (body.power_entity_id or "").strip() or wanted
+        payload["switch_entity_id"] = (body.switch_entity_id or "").strip() or derived["switch_entity_id"]
+    else:
+        payload.update(unique_entity_ids(name, appliance_key, set(by_entity)))
 
     device = Device(home_id=home_id, **payload)
     db.add(device)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two requests at once for the same sensor ID: the second one loses cleanly.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="This home already has a device with that sensor ID.")
     await db.refresh(device)
     return device
 
