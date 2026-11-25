@@ -57,3 +57,58 @@ usage based on those interactions.
 - A web page without `Cache-Control` is cached heuristically for hours by browsers and the
   WebView, so a dashboard deploy looked like it "did not work" in the app. The dashboard
   now sends `no-cache`. After any frontend deploy, check the header, not only HTTP 200.
+
+## 2026-11-25 — One community: real and synthetic accounts are treated the same
+- **Correction from Suhas:** "consider all real or synthetic users equally in the system". In
+  Phase 1 I had separated them (rankings per cohort, admin default "Real"), so the one home
+  with a Raspberry Pi was ranked "1 of 1" and never appeared with the 50 generated homes.
+- **Rule:** every ranking, analytic, alert rule and default view covers ALL accounts.
+  `users.is_synthetic` / `user_decisions.is_simulated` stay as labels and optional filters
+  only. Never add a code path that branches on them. The only places that still look at the
+  flag are the two data generators (readings, decision simulator), which write to synthetic
+  accounts only, and the guard that refuses to attach a Raspberry Pi to a synthetic account.
+  `tests/test_health_tips_and_community.py::TestOneCommunity` enforces this.
+- This supersedes the earlier "keep but flag and separate" decision: keep the flag, drop the
+  separation.
+
+## 2026-11-25 — Features of "the previous app" live in `old/`; an unanswered question is still open
+- **Correction from Suhas:** the health suggestions on alerts were "one of the distinctive
+  features" and I had not carried them over. He had mentioned "health feedback" on 16 Nov; I
+  asked what it meant, got no answer, and let it drop for nine days.
+- **Rule:** when Suhas refers to something the previous/old/single-user app did, search
+  `old/` first (`old/services/energy-calculator.js` holds the notification texts and the
+  scenario structure) before asking or guessing. `old/` is NOT the paper folder: it is a
+  valid source of intent.
+- **Rule:** a clarifying question that gets no answer is not closed. Look for the answer in
+  the repo, and if it still matters, raise it again in the next report instead of dropping it.
+- When an old file spells out one example and says the rest "follow the same structure"
+  (the dryer's four notifications), use the example word for word, build the rest in that
+  exact structure, and say plainly which texts are original and which are new.
+
+## 2026-11-25 — A phone WebView is not a narrow desktop browser
+- The dashboard's seven tabs were unreachable on a phone (squeezed into a hidden-scrollbar
+  strip one tab wide). I had tested the dashboard only at desktop width. **Rule:** every
+  dashboard change is checked at 412px wide AND inside the app's WebView.
+- Chrome's device emulation passed a layout that broke in the real WebView: a `<canvas>`
+  (300px intrinsic width) in a flex item widened the page, and the WebView then stretched the
+  fixed tab bar off-screen. **How to see what the WebView really does:** debug builds call
+  `WebView.setWebContentsDebuggingEnabled(true)`; then
+  `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>` and Playwright
+  `connect_over_cdp("http://127.0.0.1:9333")`. Port 9222 is taken on this machine.
+- `position: fixed` is anchored to any ancestor that has `backdrop-filter` (or transform /
+  filter). A fixed bar inside the blurred header was pinned to the header, not the screen.
+- A periodic "refresh the open section" timer must never redraw under the user: it closed an
+  open device panel every 30 s.
+- Selectors in UI tests must be scoped to the visible section (`#s-notifications …`,
+  `#device-list …`): the same classes exist in hidden sections once real data is present.
+
+## 2026-11-25 — "Fixed" means I watched the exact flow work
+- On 19 Nov I reported "changing the server address kept loading the old server" as fixed
+  after changing one code path, without doing it on the emulator. It was still broken (the
+  WebView was created with a stale address). **Rule:** a user-visible fix is reported as done
+  only after performing that exact flow on the emulator and seeing the result.
+- Local stand-ins have their own bugs: Python's `http.server` speaks HTTP/1.0 and the
+  emulator's NAT truncated its replies ("unexpected end of stream"). Rule out the test
+  harness before blaming the app, and say in the report which of the two it was.
+- Replacing a container still causes about 20 s of 502 on its public route while the proxy
+  re-resolves it. After every deploy, poll the public URL until it returns 200.
