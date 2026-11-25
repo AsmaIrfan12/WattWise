@@ -884,8 +884,19 @@ function goSection(name, opts = {}) {
   const changed = name !== previous;
   if (SECTION_EVENTS[name] && changed) track(SECTION_EVENTS[name], name);
   if (changed && !opts.back) {
-    _sectionTrail.push(previous);
-    if (_sectionTrail.length > 25) _sectionTrail.shift();
+    if (name === 'home') {
+      // Home is the root: once the user is back on it, "back" leaves the app instead
+      // of replaying every section visited earlier.
+      _sectionTrail.length = 0;
+    } else {
+      // Each section appears once, most recent last, so "back" walks the sections the
+      // user came through and reaches Home in at most six steps.
+      for (const sec of [previous, name]) {
+        const i = _sectionTrail.indexOf(sec);
+        if (i >= 0) _sectionTrail.splice(i, 1);
+      }
+      _sectionTrail.push(previous);
+    }
   }
   _activeSection = name;
   document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
