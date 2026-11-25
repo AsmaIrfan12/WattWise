@@ -988,6 +988,7 @@ async function login() {
 }
 
 function logout() {
+  if (!token) return;            // already signed out (several requests can fail together)
   track('LOGOUT', _activeSection);
   token = '';
   localStorage.removeItem('ww_token');

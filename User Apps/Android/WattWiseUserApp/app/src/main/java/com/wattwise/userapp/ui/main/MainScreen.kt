@@ -124,6 +124,8 @@ fun MainScreen(
     // True once THIS WebView has finished loading the dashboard. (The ViewModel flag
     // outlives the WebView, so it cannot say whether the page can run a deep link yet.)
     var pageReady by remember { mutableStateOf(false) }
+    // The server address the WebView was last told to load from.
+    var loadedServer by remember { mutableStateOf<String?>(null) }
 
     // Coming back to this screen after a failed load (e.g. from Settings, with a
     // corrected address) should try again, not show the old error.
@@ -217,6 +219,17 @@ fun MainScreen(
     // can re-authenticate via window.onNativeTokenInjected without a reload.
     LaunchedEffect(webUrl) {
         val wv = webViewRef ?: return@LaunchedEffect
+        if (webUrl.isBlank()) return@LaunchedEffect
+        // The server address changed (Settings). The WebView is created once, possibly
+        // with the address this screen last knew, so it has to be told to move: without
+        // this the dashboard kept showing the previous server until the app restarted.
+        if (!DeepLinks.isServerUrl(loadedServer, webUrl)) {
+            Timber.i("Server address changed: reloading the dashboard from the new server")
+            pageReady = false
+            loadedServer = webUrl
+            wv.loadUrl(webUrl)
+            return@LaunchedEffect
+        }
         val tok = viewModel.secureTokenStore.getTokenSync() ?: return@LaunchedEffect
         val safeToken = JSONObject.quote(tok)
         val js = """
@@ -463,6 +476,7 @@ fun MainScreen(
                                 // but only if it belongs to the server that is configured NOW
                                 // (after a change in Settings the old address must not be reused).
                                 val previous = lastWebViewUrl?.takeIf { DeepLinks.isServerUrl(it, webUrl) }
+                                loadedServer = webUrl
                                 loadUrl(previous ?: webUrl)
                             }
                         },

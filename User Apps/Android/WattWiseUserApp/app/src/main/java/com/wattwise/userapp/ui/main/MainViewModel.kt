@@ -118,7 +118,13 @@ class MainViewModel @Inject constructor(
     private val _logoutEvent = MutableStateFlow(false)
     val logoutEvent: StateFlow<Boolean> = _logoutEvent.asStateFlow()
 
+    private var loggingOut = false
+
     fun logout() {
+        // The dashboard can report the same sign-out more than once (several requests
+        // failing together when a session ends): act on the first only.
+        if (loggingOut) return
+        loggingOut = true
         viewModelScope.launch {
             try {
                 authRepository.logout()
