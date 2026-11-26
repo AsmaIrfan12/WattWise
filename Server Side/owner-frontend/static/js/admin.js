@@ -43,7 +43,14 @@ function withAccountFilter(path, opts) {
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (_token) headers['Authorization'] = `Bearer ${_token}`;
-  const res = await fetch(`${API_BASE}${withAccountFilter(path, opts)}`, { headers, ...opts });
+  const url = withAccountFilter(path, opts);
+  const filtered = url !== path;
+  const askedFor = _cohort;
+  const res = await fetch(`${API_BASE}${url}`, { headers, ...opts });
+  // The filter was changed while this request was on its way: its answer belongs to the
+  // previous choice. Drop it (never resolve), or a slow reply could paint the old
+  // choice's numbers over the new ones.
+  if (filtered && askedFor !== _cohort) return new Promise(() => {});
   if (res.status === 401) { doLogout(); return null; }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
