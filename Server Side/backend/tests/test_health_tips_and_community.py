@@ -196,4 +196,6 @@ class TestOneCommunity:
 
     def test_persona_classification_uses_the_same_rule_for_every_user(self):
         src = inspect.getsource(persona_classifier)
-        assert "is_synthetic" not in src and "is_simulated" not in src
+        assert "is_synthetic" not in src
+        # Generated decisions are left out for EVERY account (see test_account_filter.py).
+        assert "UserDecision.is_simulated.is_(False)" in src

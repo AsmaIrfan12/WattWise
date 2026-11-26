@@ -24,7 +24,7 @@ from app.schemas import (
 from app.notification_engine import NotificationEngine
 from app.decision_tracker import DecisionTracker
 from app.config import settings
-from app.cohorts import normalise_cohort, apply_user_cohort
+from app.cohorts import CohortScope, normalise_cohort, apply_user_cohort
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -73,37 +73,39 @@ async def _log_audit(db, admin_user_id, action_type, target_user_id=None, detail
 # ── Dashboard ─────────────────────────────────────────────────
 
 @router.get("/dashboard", response_model=AdminDashboardResponse)
-async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db),
+                        cohort: str = Query(default="all")):
     _require_admin(request)
+    scope = CohortScope(cohort)
     today = date.today()
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    total_users = (await db.execute(select(func.count(User.id)).where(User.is_admin == False))).scalar()
+    total_users = (await db.execute(select(func.count(User.id)).where(User.is_admin == False, *scope.user_rows()))).scalar()
     active_today = (await db.execute(
         select(func.count(func.distinct(UserInteractionLog.user_id)))
-        .where(UserInteractionLog.created_at >= today_start)
+        .where(UserInteractionLog.created_at >= today_start, *scope.users(UserInteractionLog.user_id))
     )).scalar()
-    total_homes = (await db.execute(select(func.count(Home.id)).where(Home.is_active == True))).scalar()
-    total_devices = (await db.execute(select(func.count(Device.id)).where(Device.is_active == True))).scalar()
+    total_homes = (await db.execute(select(func.count(Home.id)).where(Home.is_active == True, *scope.users(Home.user_id)))).scalar()
+    total_devices = (await db.execute(select(func.count(Device.id)).where(Device.is_active == True, *scope.homes(Device.home_id)))).scalar()
 
     energy_result = await db.execute(
         select(func.sum(HomeDailyTotal.total_kwh), func.sum(HomeDailyTotal.total_cost_gbp))
-        .where(HomeDailyTotal.day_date == today)
+        .where(HomeDailyTotal.day_date == today, *scope.homes(HomeDailyTotal.home_id))
     )
     erow = energy_result.one()
     energy_kwh = float(erow[0] or 0)
     cost_gbp = float(erow[1] or 0)
 
     notifs_today = (await db.execute(
-        select(func.count(Notification.id)).where(Notification.created_at >= today_start)
+        select(func.count(Notification.id)).where(Notification.created_at >= today_start, *scope.users(Notification.user_id))
     )).scalar()
     decisions_today = (await db.execute(
-        select(func.count(UserDecision.id)).where(UserDecision.created_at >= today_start)
+        select(func.count(UserDecision.id)).where(UserDecision.created_at >= today_start, *scope.users(UserDecision.user_id))
     )).scalar()
 
     adherence_result = await db.execute(
         select(func.avg(EnergyRanking.goal_adherence_score))
-        .where(EnergyRanking.period_start == today - timedelta(days=1))
+        .where(EnergyRanking.period_start == today - timedelta(days=1), *scope.users(EnergyRanking.user_id))
     )
     avg_adherence = float(adherence_result.scalar() or 70.0)
 
@@ -370,14 +372,16 @@ async def bulk_operation(
 # ── Personas ──────────────────────────────────────────────────
 
 @router.get("/personas")
-async def list_personas(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_personas(request: Request, db: AsyncSession = Depends(get_db),
+                        cohort: str = Query(default="all")):
     _require_admin(request)
+    scope = CohortScope(cohort)
     result = await db.execute(select(Persona))
     personas = result.scalars().all()
     output = []
     for p in personas:
         count_result = await db.execute(
-            select(func.count(User.id)).where(User.persona_id == p.id, User.is_admin == False)
+            select(func.count(User.id)).where(User.persona_id == p.id, User.is_admin == False, *scope.user_rows())
         )
         output.append({
             "id": p.id, "name": p.name, "description": p.description,
@@ -392,9 +396,11 @@ async def get_persona_users(
     request: Request,
     db: AsyncSession = Depends(get_db),
     limit: int = Query(default=50, ge=1, le=200),
+    cohort: str = Query(default="all"),
 ):
     """Members of a given persona, with last-30d headline stats for the drill-down panel."""
     _require_admin(request)
+    scope = CohortScope(cohort)
     cutoff = date.today() - timedelta(days=30)
     rows = await db.execute(
         select(
@@ -412,7 +418,7 @@ async def get_persona_users(
             & (EnergyRanking.period_type == "DAILY")
             & (EnergyRanking.period_start >= cutoff),
         )
-        .where(User.persona_id == persona_id, User.is_admin.is_(False))
+        .where(User.persona_id == persona_id, User.is_admin.is_(False), *scope.user_rows())
         .group_by(
             User.id, User.name, User.email,
             User.last_login_at, User.notifications_enabled,
@@ -615,6 +621,7 @@ async def get_personas_history(
     request: Request, db: AsyncSession = Depends(get_db),
     period: str = Query(default="DAILY", pattern="^(DAILY|WEEKLY|MONTHLY)$"),
     buckets: int = Query(default=12, ge=1, le=52),
+    cohort: str = Query(default="all"),
 ):
     """
     Returns persona-membership distribution at multiple points in time so the
@@ -626,6 +633,7 @@ async def get_personas_history(
     period: DAILY (last N days), WEEKLY (last N weeks), MONTHLY (last N months)
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
 
     today = date.today()
     if period == "DAILY":
@@ -666,6 +674,7 @@ async def get_personas_history(
                 EnergyRanking.period_type == "DAILY",
                 EnergyRanking.period_start >= window_start,
                 EnergyRanking.period_start <= b,
+                *scope.users(EnergyRanking.user_id),
             )
             .group_by(EnergyRanking.user_id)
         )
@@ -678,7 +687,7 @@ async def get_personas_history(
         counts = {p.name: 0 for p in persona_list}
         # Disengaged = total non-admin users minus engaged
         total_users_q = await db.execute(
-            select(func.count(User.id)).where(User.is_admin.is_(False))
+            select(func.count(User.id)).where(User.is_admin.is_(False), *scope.user_rows())
         )
         total_users = int(total_users_q.scalar() or 0)
         counts["Disengaged"] = max(0, total_users - n)
@@ -727,6 +736,7 @@ async def get_energy_analytics(
     hours: Optional[int] = Query(default=None, ge=1, le=168),
     start_date: Optional[str] = Query(default=None),
     end_date: Optional[str] = Query(default=None),
+    cohort: str = Query(default="all"),
 ):
     """
     Community energy summary.
@@ -735,6 +745,7 @@ async def get_energy_analytics(
       (from home_daily_totals).
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
 
     # ── Hourly mode ──────────────────────────────────────────
     if hours is not None:
@@ -748,7 +759,7 @@ async def get_energy_analytics(
                 func.avg(HourlySummary.avg_watts).label("avg_watts"),
                 func.count(func.distinct(HourlySummary.device_id)).label("active_devices"),
             )
-            .where(HourlySummary.hour_start >= since_ts)
+            .where(HourlySummary.hour_start >= since_ts, *scope.devices(HourlySummary.device_id))
             .group_by(HourlySummary.hour_start)
             .order_by(HourlySummary.hour_start.asc())
         )
@@ -772,7 +783,7 @@ async def get_energy_analytics(
                 func.sum(EnergyReading.energy_kwh).label("kwh"),
                 func.count(func.distinct(EnergyReading.device_id)).label("devs"),
             )
-            .where(EnergyReading.recorded_at >= since_ts)
+            .where(EnergyReading.recorded_at >= since_ts, *scope.devices(EnergyReading.device_id))
             .group_by(hour_expr)
             .order_by(hour_expr.asc())
         )
@@ -803,7 +814,7 @@ async def get_energy_analytics(
             func.count(func.distinct(HomeDailyTotal.home_id)).label("active_homes"),
             func.avg(HomeDailyTotal.total_kwh).label("avg_kwh"),
         )
-        .where(HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until)
+        .where(HomeDailyTotal.day_date >= since, HomeDailyTotal.day_date <= until, *scope.homes(HomeDailyTotal.home_id))
         .group_by(HomeDailyTotal.day_date)
         .order_by(HomeDailyTotal.day_date.asc())
     )
@@ -833,7 +844,7 @@ async def get_energy_analytics(
         )
         .join(Device, EnergyReading.device_id == Device.id)
         .join(Home, Device.home_id == Home.id)
-        .where(EnergyReading.recorded_at >= start_dt, EnergyReading.recorded_at < end_dt)
+        .where(EnergyReading.recorded_at >= start_dt, EnergyReading.recorded_at < end_dt, *scope.users(Home.user_id))
         .group_by(func.date(EnergyReading.recorded_at))
         .order_by(func.date(EnergyReading.recorded_at).asc())
     )
@@ -854,6 +865,7 @@ async def get_device_timeseries(
     request: Request, db: AsyncSession = Depends(get_db),
     hours: int = Query(default=24, ge=1, le=720),
     home_id: Optional[int] = Query(default=None),
+    cohort: str = Query(default="all"),
 ):
     """
     Per-device hourly time series for the live admin chart.
@@ -865,6 +877,7 @@ async def get_device_timeseries(
     - `home_id`: optional filter to a single RPi / home
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     since_ts = now - timedelta(hours=hours)
 
@@ -881,7 +894,7 @@ async def get_device_timeseries(
         )
         .join(Device, HourlySummary.device_id == Device.id)
         .join(Home, Device.home_id == Home.id)
-        .where(HourlySummary.hour_start >= since_ts, Device.is_active.is_(True))
+        .where(HourlySummary.hour_start >= since_ts, Device.is_active.is_(True), *scope.users(Home.user_id))
         .order_by(Device.home_id, Device.id, HourlySummary.hour_start.asc())
     )
     if home_id is not None:
@@ -906,7 +919,7 @@ async def get_device_timeseries(
             )
             .join(Device, EnergyReading.device_id == Device.id)
             .join(Home, Device.home_id == Home.id)
-            .where(EnergyReading.recorded_at >= since_ts, Device.is_active.is_(True))
+            .where(EnergyReading.recorded_at >= since_ts, Device.is_active.is_(True), *scope.users(Home.user_id))
             .group_by(EnergyReading.device_id, hour_expr, Device.name,
                       Device.appliance_key, Home.id, Home.home_name)
             .order_by(Home.id, EnergyReading.device_id, hour_expr.asc())
@@ -981,8 +994,10 @@ async def get_community_benchmark(request: Request, db: AsyncSession = Depends(g
 
 @router.get("/analytics/persona-comparison")
 async def get_persona_comparison(request: Request, db: AsyncSession = Depends(get_db),
-                                  days: int = Query(default=30, ge=7, le=180)):
+                                  days: int = Query(default=30, ge=7, le=180),
+                                  cohort: str = Query(default="all")):
     _require_admin(request)
+    scope = CohortScope(cohort)
     since = date.today() - timedelta(days=days)
     result = await db.execute(
         select(
@@ -995,7 +1010,7 @@ async def get_persona_comparison(request: Request, db: AsyncSession = Depends(ge
         )
         .join(User, User.persona_id == Persona.id)
         .join(EnergyRanking, EnergyRanking.user_id == User.id)
-        .where(EnergyRanking.period_start >= since)
+        .where(EnergyRanking.period_start >= since, *scope.user_rows())
         .group_by(Persona.id, Persona.name)
         .order_by(func.avg(EnergyRanking.efficiency_score).desc())
     )
@@ -1016,8 +1031,10 @@ async def get_persona_comparison(request: Request, db: AsyncSession = Depends(ge
 async def get_user_interaction_stats(
     request: Request, db: AsyncSession = Depends(get_db),
     days: int = Query(default=7, ge=1, le=90),
+    cohort: str = Query(default="all"),
 ):
     _require_admin(request)
+    scope = CohortScope(cohort)
     since = datetime.utcnow() - timedelta(days=days)
     result = await db.execute(
         select(
@@ -1025,7 +1042,7 @@ async def get_user_interaction_stats(
             func.count().label("count"),
             func.count(func.distinct(UserInteractionLog.user_id)).label("unique_users"),
         )
-        .where(UserInteractionLog.created_at >= since)
+        .where(UserInteractionLog.created_at >= since, *scope.users(UserInteractionLog.user_id))
         .group_by(UserInteractionLog.interaction_type)
         .order_by(func.count().desc())
     )
@@ -1292,13 +1309,15 @@ async def pipeline_health(request: Request, db: AsyncSession = Depends(get_db)):
 # ── Device / RPi Monitoring ───────────────────────────────────
 
 @router.get("/devices/status")
-async def get_device_status(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_device_status(request: Request, db: AsyncSession = Depends(get_db),
+                            cohort: str = Query(default="all")):
     _require_admin(request)
+    scope = CohortScope(cohort)
     devices_result = await db.execute(
         select(Device, Home, User)
         .join(Home, Device.home_id == Home.id)
         .join(User, Home.user_id == User.id)
-        .where(Device.is_active == True)
+        .where(Device.is_active == True, *scope.user_rows())
         .order_by(Home.home_name.asc(), Device.name.asc())
     )
     devices = devices_result.all()
@@ -1365,6 +1384,7 @@ async def get_energy_sankey(
     db: AsyncSession = Depends(get_db),
     days: int = Query(default=7, ge=1, le=90),
     top_homes: int = Query(default=10, ge=1, le=50),
+    cohort: str = Query(default="all"),
 ):
     """
     Returns Sankey-flow data for kWh usage over the last `days` days.
@@ -1378,6 +1398,7 @@ async def get_energy_sankey(
     Used for thesis-quality energy-flow visualisations.
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
 
     cutoff = datetime.utcnow() - timedelta(days=days)
     cutoff_date = cutoff.date()
@@ -1396,6 +1417,7 @@ async def get_energy_sankey(
             HourlySummary.hour_start >= cutoff,
             Device.is_active.is_(True),
             Device.appliance_key.is_not(None),
+            *scope.users(Home.user_id),
         )
         .group_by(Home.id, Home.home_name, Device.appliance_key, func.hour(HourlySummary.hour_start))
     )).all()
@@ -1490,6 +1512,7 @@ async def get_anomalies(
     threshold_factor: float = Query(default=2.0, ge=1.2, le=10.0),
     home_id: Optional[int] = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
+    cohort: str = Query(default="all"),
 ):
     """
     Identify anomalous hourly buckets where a device's kWh exceeded
@@ -1502,6 +1525,7 @@ async def get_anomalies(
     - Admin Notifications tab → "Anomaly Drill-down" panel
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
 
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     since = now - timedelta(hours=hours)
@@ -1516,7 +1540,7 @@ async def get_anomalies(
             func.hour(HourlySummary.hour_start).label("hod"),
             func.avg(HourlySummary.total_kwh).label("baseline_avg_kwh"),
         )
-        .where(HourlySummary.hour_start >= baseline_window_start)
+        .where(HourlySummary.hour_start >= baseline_window_start, *scope.devices(HourlySummary.device_id))
         .group_by(HourlySummary.device_id, func.hour(HourlySummary.hour_start))
     )
     if home_id is not None:
@@ -1542,7 +1566,7 @@ async def get_anomalies(
         .join(Device, HourlySummary.device_id == Device.id)
         .join(Home, Device.home_id == Home.id)
         .join(User, Home.user_id == User.id)
-        .where(HourlySummary.hour_start >= since, Device.is_active.is_(True))
+        .where(HourlySummary.hour_start >= since, Device.is_active.is_(True), *scope.user_rows())
         .order_by(HourlySummary.hour_start.desc())
     )
     if home_id is not None:
@@ -1774,12 +1798,14 @@ async def simulate_user_decisions(
 async def get_admin_notifications_breakdown(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    cohort: str = Query(default="all"),
 ):
     """
     System-wide notification breakdown for the admin Notifications tab.
     Same shape as /api/notifications/stats/breakdown but across ALL users.
     """
     _require_admin(request)
+    scope = CohortScope(cohort)
     now = datetime.utcnow()
     last_24h = now - timedelta(hours=24)
     last_7d = now - timedelta(days=7)
@@ -1788,6 +1814,7 @@ async def get_admin_notifications_breakdown(
     # By notification_type
     by_type_q = await db.execute(
         select(Notification.notification_type, func.count(Notification.id))
+        .where(*scope.users(Notification.user_id))
         .group_by(Notification.notification_type)
         .order_by(func.count(Notification.id).desc())
     )
@@ -1796,6 +1823,7 @@ async def get_admin_notifications_breakdown(
     # By severity
     by_severity_q = await db.execute(
         select(Notification.severity, func.count(Notification.id))
+        .where(*scope.users(Notification.user_id))
         .group_by(Notification.severity)
     )
     by_severity = [{"severity": s or "INFO", "count": int(c)} for s, c in by_severity_q.all()]
@@ -1804,7 +1832,7 @@ async def get_admin_notifications_breakdown(
     by_appliance_q = await db.execute(
         select(Device.appliance_key, func.count(Notification.id))
         .join(Notification, Notification.device_id == Device.id)
-        .where(Device.appliance_key.is_not(None))
+        .where(Device.appliance_key.is_not(None), *scope.users(Notification.user_id))
         .group_by(Device.appliance_key)
         .order_by(func.count(Notification.id).desc())
     )
@@ -1814,7 +1842,7 @@ async def get_admin_notifications_breakdown(
     top_users_q = await db.execute(
         select(User.id, User.name, User.email, func.count(Notification.id).label("notifs"))
         .join(Notification, Notification.user_id == User.id)
-        .where(User.is_admin.is_(False))
+        .where(User.is_admin.is_(False), *scope.user_rows())
         .group_by(User.id, User.name, User.email)
         .order_by(func.count(Notification.id).desc())
         .limit(10)
@@ -1826,11 +1854,11 @@ async def get_admin_notifications_breakdown(
 
     # By time bucket
     async def count_since(ts):
-        q = select(func.count(Notification.id)).where(Notification.created_at >= ts)
+        q = select(func.count(Notification.id)).where(Notification.created_at >= ts, *scope.users(Notification.user_id))
         return int((await db.execute(q)).scalar() or 0)
 
     async def count_total():
-        q = select(func.count(Notification.id))
+        q = select(func.count(Notification.id)).where(*scope.users(Notification.user_id))
         return int((await db.execute(q)).scalar() or 0)
 
     by_period = {
@@ -1846,7 +1874,7 @@ async def get_admin_notifications_breakdown(
             func.sum(case((Notification.is_read, 1), else_=0)).label("read"),
             func.sum(case((Notification.is_read, 0), else_=1)).label("unread"),
             func.sum(case((Notification.dismissed, 1), else_=0)).label("dismissed"),
-        )
+        ).where(*scope.users(Notification.user_id))
     )
     state_row = state_q.one()
 

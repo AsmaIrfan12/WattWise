@@ -31,10 +31,19 @@ let _personaBadgeClass = {
 };
 
 // ── API Helper ──────────────────────────────────────────────
+// The "Show" choice (all / real / synthetic accounts) applies to every tab: it is added
+// to every read of account data. It used to be passed by hand on four cards only, so on
+// the other tabs choosing an option changed nothing.
+function withAccountFilter(path, opts) {
+  const method = (opts.method || 'GET').toUpperCase();
+  if (method !== 'GET' || !path.startsWith('/api/admin/') || /[?&]cohort=/.test(path)) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}cohort=${encodeURIComponent(_cohort)}`;
+}
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (_token) headers['Authorization'] = `Bearer ${_token}`;
-  const res = await fetch(`${API_BASE}${path}`, { headers, ...opts });
+  const res = await fetch(`${API_BASE}${withAccountFilter(path, opts)}`, { headers, ...opts });
   if (res.status === 401) { doLogout(); return null; }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -529,7 +538,9 @@ function navigateTo(section) {
     rankings: 'Community Rankings', analytics: 'Analytics', devices: 'Device Status',
     notifications: 'Notifications', decisions: 'Decisions & Responses', backup: 'Backups', audit: 'Audit Log',
   };
-  document.getElementById('page-title').textContent = titles[section] || section;
+  // The page title says when a filter is on, so it is never applied unnoticed.
+  document.getElementById('page-title').textContent =
+    (titles[section] || section) + (_cohort === 'all' ? '' : ` · ${COHORT_LABELS[_cohort]} only`);
 
   // Load section data
   switch (section) {

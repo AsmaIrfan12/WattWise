@@ -387,3 +387,33 @@ async def cancel_campaign(campaign_id: int, request: Request, db: AsyncSession =
     campaign.status = "CANCELLED"
     await db.commit()
     return {"id": campaign.id, "status": campaign.status}
+
+
+@router.post("/campaigns/{campaign_id}/mark-test")
+async def mark_campaign_as_test(campaign_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Flag every response to this send as generated (is_simulated).
+
+    For sends made by automated checks (Server Side/scripts/e2e_loop.py) or by an admin
+    trying things out on a demo account: the alerts and answers stay visible, flagged,
+    but they no longer count in rankings or personas. Cannot be undone from the portal.
+    """
+    admin_id = _require_admin(request)
+    campaign = (await db.execute(
+        select(NotificationCampaign).where(NotificationCampaign.id == campaign_id)
+    )).scalar_one_or_none()
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    decisions = (await db.execute(
+        select(UserDecision).join(Notification, Notification.id == UserDecision.notification_id)
+        .where(Notification.campaign_id == campaign_id, UserDecision.is_simulated.is_(False))
+    )).scalars().all()
+    for d in decisions:
+        d.is_simulated = True
+    db.add(AdminAuditLog(
+        admin_user_id=admin_id, action_type="SIMULATE_DECISIONS",
+        details_json={"operation": "mark_campaign_as_test", "campaign_id": campaign_id, "decisions_flagged": len(decisions)},
+        ip_address=request.client.host if request.client else None,
+    ))
+    await db.commit()
+    return {"campaign_id": campaign_id, "decisions_flagged": len(decisions)}

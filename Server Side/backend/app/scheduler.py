@@ -428,11 +428,15 @@ async def compute_rankings(target_date: date = None, period_type: str = "DAILY")
             )
             .group_by(UserDecision.user_id, UserDecision.is_simulated)
         )
-        # Every recorded decision counts the same way for every user.
+        # Every decision a person made counts the same way for every account. Generated
+        # decisions (is_simulated: the demo simulator, automated tests) are not behaviour
+        # and never feed a ranking, and so never reach a persona either.
         decided_by_user: dict[int, int] = {}
         eff_sum: dict[int, float] = {}
         eff_n: dict[int, int] = {}
-        for uid, _simulated, n, avg_eff in dec_rows.all():
+        for uid, simulated, n, avg_eff in dec_rows.all():
+            if simulated:
+                continue
             decided_by_user[uid] = decided_by_user.get(uid, 0) + int(n)
             if avg_eff is not None:
                 eff_sum[uid] = eff_sum.get(uid, 0.0) + float(avg_eff) * int(n)

@@ -176,6 +176,18 @@ def main() -> int:
         r = c.get("/api/admin/decisions", headers=user)
         check("non-admins cannot read the explorer", r.status_code == 403)
 
+        # These sends and answers were made by this script, not by a person. Flag them so
+        # they stay out of rankings and personas (they remain visible, marked "simulated").
+        flagged = 0
+        for cid in (campaign_id, second_campaign):
+            r = c.post(f"/api/admin/campaigns/{cid}/mark-test", headers=admin)
+            if r.status_code == 200:
+                flagged += r.json().get("decisions_flagged", 0)
+        r = c.get(f"/api/admin/decisions?cohort=all&campaign_id={campaign_id}", headers=admin)
+        rows = r.json().get("items", [])
+        check("the test's own answers are flagged as generated", flagged >= 1 and rows and all(d["is_simulated"] for d in rows),
+              f"flagged={flagged} rows={[(d['decision_id'], d['is_simulated']) for d in rows]}")
+
     print()
     if FAILED:
         print(f"FAILED ({len(FAILED)}): " + "; ".join(FAILED))
