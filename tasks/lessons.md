@@ -146,3 +146,31 @@ usage based on those interactions.
   and assert the outcome the user wants (the device exists and is visible).
 - Looking at the emulator screenshot for one thing showed another (a false "No internet
   connection" banner). Read the whole screenshot, not only the part under test.
+
+## 2026-11-26 — A filter must work on every screen it is shown on
+- **Correction from Suhas:** the All / Real / Synthetic drop-down sits in the portal header
+  on every tab, but it only worked on four cards. I had known this since 16 Nov and listed
+  it as "not yet" instead of finishing it.
+- **Rule:** a control placed in a global position (header, sidebar) must act on every view
+  under it, or it must not be there. Wire such a choice in ONE place on the client (`api()`
+  adds `cohort` to every admin read) and ONE helper on the server (`CohortScope`), never
+  view by view. `tests/test_account_filter.py` lists every admin view and fails when one
+  lacks the parameter or leaves a query unscoped.
+- When a choice can change while requests are in flight, drop replies that belong to the
+  previous choice, or a slow one repaints old numbers over new ones.
+- "One community" still holds: the default is all accounts; Real / Synthetic are filters.
+
+## 2026-11-26 — My own test traffic changed a research result
+- Running `e2e_loop.py` on the server left real-looking decisions on a synthetic account.
+  Decisions make up 3 of the 8 persona features, so that account became the only
+  "Eco Champion" for ten days. I found it only when Suhas asked what feeds the persona.
+- **Rule:** anything an automated check writes into production must be labelled as
+  generated at the time it is written. The script now calls
+  `POST /api/admin/campaigns/{id}/mark-test`; decisions flagged `is_simulated` are excluded
+  from rankings and persona features for every account.
+- **Rule:** after any automated run against production, query what it left behind
+  (decisions, alerts, devices) and state it in the report. "The test passed" is not the
+  whole outcome.
+- When asked to "confirm" a statement for a paper, check it against the database and the
+  code first and say plainly if it is not true as written. Here the statement was wrong in
+  both halves: no simulator decisions exist at all, and decisions do feed the persona.
